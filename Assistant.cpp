@@ -381,12 +381,21 @@ QString Assistant::callConfigPath() const {
     return dir + QStringLiteral("/call.txt");
 }
 
-// Sostituisce nel prompt il nominativo/nome dell'autore con quello dell'utente.
+// Memoria persistente letta dal modulo OllamaClient (decodius_memoria.txt).
+QString decodiusLeggiMemoria();
+
+// Sostituisce nel prompt il nominativo/nome dell'autore con quello dell'utente,
+// e vi innesta la MEMORIA PERSISTENTE così il modello "ricorda" tra le sessioni.
 void Assistant::applySystemPrompt() {
     QString p = m_sysPromptRaw;
     if (!m_callSign.isEmpty()) {
         p.replace(QStringLiteral("IU8LMC"), m_callSign);
         p.replace(QStringLiteral("Martino"), m_callSign);
+    }
+    const QString mem = decodiusLeggiMemoria();
+    if (!mem.isEmpty()) {
+        p += QStringLiteral("\n\nMEMORIA PERSISTENTE (cose che ricordi dalle sessioni precedenti; "
+                            "usala quando pertinente, ma non elencarla a meno che non te lo chieda):\n") + mem;
     }
     m_ollama.setSystemPrompt(p);
 }

@@ -308,6 +308,37 @@ static QString runLogQso(const QJsonObject& args) {
              banda.isEmpty() ? "?" : banda, modo.isEmpty() ? "?" : modo, rst, path);
 }
 
+// ── Memoria persistente: Decodius ricorda fatti tra le sessioni ──
+// File di testo (una riga per fatto) accanto al log, leggibile dall'utente.
+static QString memoriaPath() {
+    return QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)
+         + QStringLiteral("/decodius_memoria.txt");
+}
+// Lettura grezza della memoria (usata anche da Assistant per il system prompt).
+QString decodiusLeggiMemoria() {
+    QFile f(memoriaPath());
+    if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) return QString();
+    return QString::fromUtf8(f.readAll()).trimmed();
+}
+static QString runMemoria(const QJsonObject& args) {
+    const QString azione = args.value("azione").toString().trimmed().toLower();
+    if (azione == QLatin1String("leggi") || azione == QLatin1String("elenca")) {
+        const QString c = decodiusLeggiMemoria();
+        return c.isEmpty() ? QStringLiteral("Memoria vuota: non ricordo ancora nulla.")
+                           : (QStringLiteral("Cose che ricordo:\n") + c);
+    }
+    const QString contenuto = args.value("contenuto").toString().trimmed();
+    if (contenuto.isEmpty()) return QStringLiteral("Errore: indica il 'contenuto' da ricordare.");
+    QFile f(memoriaPath());
+    if (!f.open(QIODevice::Append | QIODevice::Text))
+        return QStringLiteral("Errore: impossibile salvare la memoria.");
+    const QString line = QStringLiteral("- [%1] %2\n")
+        .arg(QDateTime::currentDateTimeUtc().toString("yyyy-MM-dd"), contenuto);
+    f.write(line.toUtf8());
+    f.close();
+    return QStringLiteral("Memorizzato: %1").arg(contenuto);
+}
+
 // ── Lookup nominativi: prefisso -> Paese/DXCC (tabella offline) ──
 // Match dal prefisso più lungo (3) al più corto (1). Copertura: tutta l'Europa,
 // Nord/Sud America, principali entità di Asia/Africa/Oceania.
@@ -416,6 +447,8 @@ static QString runTool(const QString& name, const QJsonObject& args) {
         return runOraUtc(args);
     if (name == QLatin1String("log_qso"))
         return runLogQso(args);
+    if (name == QLatin1String("memoria"))
+        return runMemoria(args);
     return QStringLiteral("Errore: strumento sconosciuto \"%1\".").arg(name);
 }
 
@@ -638,6 +671,29 @@ OllamaClient::OllamaClient(QObject* parent) : QObject(parent) {
         }}
     };
     m_tools.append(logQso);
+
+    // memoria: ricorda fatti tra le sessioni (stazioni lavorate, preferenze, ecc.).
+    QJsonObject memoria{
+        {"type", "function"},
+        {"function", QJsonObject{
+            {"name", "memoria"},
+            {"description",
+             "Memoria persistente di Decodius: ricorda informazioni tra una sessione e l'altra "
+             "(stazioni lavorate, preferenze operative di Martino, obiettivi, appunti). "
+             "Usa azione 'salva' (con 'contenuto') per memorizzare un fatto NUOVO e duraturo che "
+             "l'utente ti dice o che emerge dal QSO; usa azione 'leggi' per rileggere cosa ricordi. "
+             "Salva solo fatti utili a lungo termine, non chiacchiere della conversazione."},
+            {"parameters", QJsonObject{
+                {"type", "object"},
+                {"properties", QJsonObject{
+                    {"azione", QJsonObject{{"type", "string"}, {"description", "salva | leggi"}}},
+                    {"contenuto", QJsonObject{{"type", "string"}, {"description", "il fatto da ricordare (per azione salva)"}}}
+                }},
+                {"required", QJsonArray{"azione"}}
+            }}
+        }}
+    };
+    m_tools.append(memoria);
 
     // propagazione: dati solari/propagazione live (via web, async).
     QJsonObject propag{
