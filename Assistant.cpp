@@ -9,6 +9,7 @@
 #include <QStandardPaths>
 #include <QUrl>
 #include <QTimer>
+#include <QDateTime>
 
 static const char* kSystemPrompt =
     "Ti chiami Decodius. Sei l'assistente personale di Martino, radioamatore (IU8LMC) "
@@ -128,8 +129,42 @@ Assistant::Assistant(QObject* parent) : QObject(parent) {
         connect(m_whisper, &WhisperStt::recognized, this, [this](const QString& text) {
             // Ciclo audio STABILE (niente barge-in vocale: causava use-after-free in
             // Qt6Core tenendo il mic acceso durante il parlato). Interruzione: clic.
-            if (!text.isEmpty()) sendText(text);
-            else endTurn();
+            if (text.isEmpty()) { endTurn(); return; }
+
+            if (m_wakeWord) {
+                const QString low = text.toLower();
+                // Whisper puo' trascrivere "Decodius" in modi diversi: accetto il radicale "decod".
+                const int wpos = low.indexOf(QStringLiteral("decod"));
+                const bool hasWake = (wpos >= 0);
+                const qint64 now = QDateTime::currentMSecsSinceEpoch();
+                const bool awake = (now < m_awakeUntilMs);
+                if (!hasWake && !awake) { endTurn(); return; }   // niente wake-word: ignora e riascolta
+
+                // Estrae il comando dopo la wake-word (se presente all'inizio della frase).
+                QString cmd = text;
+                if (hasWake) {
+                    int cut = wpos;
+                    while (cut < cmd.size() && cmd[cut].isLetter()) ++cut;   // salta la parola
+                    cmd = cmd.mid(cut).trimmed();
+                    // toglie un'eventuale punteggiatura iniziale residua
+                    while (!cmd.isEmpty() && !cmd[0].isLetterOrNumber()) cmd = cmd.mid(1);
+                }
+                m_awakeUntilMs = now + 15000;   // resta "sveglio" 15 s per il follow-up naturale
+
+                if (cmd.isEmpty()) {            // solo "Decodius": rispondi e attendi il comando
+#ifdef HAVE_TTS
+                    m_streaming = false; ttsStop(); ttsSay(QStringLiteral("Dimmi pure."));
+#endif
+                    m_lastResponse = QStringLiteral("Dimmi pure.");
+                    emit lastResponseChanged();
+                    endTurn();
+                    return;
+                }
+                sendText(cmd);
+                return;
+            }
+
+            sendText(text);
         });
         // Appena il modello è pronto, in modalità always-on parte subito l'ascolto.
         connect(m_whisper, &WhisperStt::ready, this, [this]() {
@@ -326,6 +361,14 @@ void Assistant::sendText(const QString& text) {
         setAutoPilot(false);
         return;
     }
+    // Comando: attiva/disattiva le "mani libere" (ascolto continuo con wake-word).
+    if (low.contains(QStringLiteral("mani libere")) || low.contains(QStringLiteral("wake word"))
+        || low.contains(QStringLiteral("parola di attivazione"))) {
+        const bool off = low.contains(QStringLiteral("ferma")) || low.contains(QStringLiteral("disattiva"))
+                       || low.contains(QStringLiteral("spegni")) || low.contains(QStringLiteral("disabilita"));
+        setWakeWord(!off);
+        return;
+    }
     if (t.isEmpty()) t = QStringLiteral("Descrivi questa immagine.");  // query solo-immagine
     // Se Decodius sta già elaborando o parlando, annullo PRIMA in modo silenzioso
     // (niente errore spurio): così una nuova istruzione interrompe e prende il posto.
@@ -491,6 +534,29 @@ void Assistant::onAutoTick() {
         "apertura di banda, QSO fatto). Se non c'e' nulla di nuovo o rilevante, rispondi "
         "ESATTAMENTE con la sola parola: SILENZIO");
     m_ollama.ask(tick);
+}
+
+// Attiva/disattiva la modalità a mani libere con wake-word "Decodius".
+void Assistant::setWakeWord(bool on) {
+    if (m_wakeWord == on) return;
+    m_wakeWord = on;
+    emit wakeWordChanged();
+    if (on) {
+        m_awakeUntilMs = 0;             // alla partenza richiede la wake-word
+        setListening(true);            // avvia l'ascolto continuo
+        const QString msg = QStringLiteral("Mani libere attive. Chiamami dicendo \"Decodius\" e poi la tua richiesta.");
+        m_lastResponse = msg; emit lastResponseChanged();
+#ifdef HAVE_TTS
+        m_streaming = false; ttsStop(); ttsSay(msg);
+#endif
+    } else {
+        setListening(false);
+        const QString msg = QStringLiteral("Mani libere disattivate.");
+        m_lastResponse = msg; emit lastResponseChanged();
+#ifdef HAVE_TTS
+        m_streaming = false; ttsStop(); ttsSay(msg);
+#endif
+    }
 }
 
 // Imposta il nominativo (primo avvio o cambio): salva, riapplica il prompt, notifica la UI.

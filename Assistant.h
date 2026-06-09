@@ -27,6 +27,8 @@ class Assistant : public QObject {
     Q_PROPERTY(bool needsCallSign READ needsCallSign NOTIFY callSignChanged)
     // Pilota automatico: Decodius opera la stazione in autonomia (monitor proattivo).
     Q_PROPERTY(bool autoPilot READ autoPilot NOTIFY autoPilotChanged)
+    // Wake-word "Decodius": in ascolto continuo reagisce solo dopo la parola di attivazione.
+    Q_PROPERTY(bool wakeWord READ wakeWord NOTIFY wakeWordChanged)
 
 public:
     enum State { Idle, Listening, Thinking, Speaking };
@@ -43,6 +45,8 @@ public:
     Q_INVOKABLE void setCallSign(const QString& call);   // salva e applica il nominativo
     bool autoPilot() const { return m_autoPilot; }
     Q_INVOKABLE void setAutoPilot(bool on);   // attiva/disattiva il pilota automatico
+    bool wakeWord() const { return m_wakeWord; }
+    Q_INVOKABLE void setWakeWord(bool on);    // attiva/disattiva la modalità a mani libere con wake-word
 
     Q_INVOKABLE void sendText(const QString& text);
     Q_INVOKABLE void setListening(bool on);   // attiva/disattiva l'ascolto continuo
@@ -60,6 +64,7 @@ signals:
     void alwaysListeningChanged();
     void callSignChanged();
     void autoPilotChanged();
+    void wakeWordChanged();
     // Inoltrato a QML: uno strumento chiede conferma prima di scrivere.
     void confirmationRequested(const QString& title, const QString& detail);
 
@@ -74,6 +79,10 @@ private:
     void onSpeechRecognized(const QString& text);
     bool isLikelyEcho(const QString& text) const;   // distingue l'eco di Decodius dalla voce utente
     bool m_voiceBargeIn = true;   // ascolta mentre parla per interrompere a voce
+    // Wake-word: in ascolto continuo processa una frase solo se contiene "Decodius"
+    // (o se siamo ancora nella finestra di "veglia" dopo l'ultima interazione).
+    bool   m_wakeWord = false;
+    qint64 m_awakeUntilMs = 0;    // fino a quando accettare frasi senza ripetere la wake-word
 
     // ── Pilota automatico (Fase 3): tick periodico che fa "ragionare e agire" l'LLM
     // sulla banda usando i suoi tool (decodium, dxcluster, memoria, comandi). ──
