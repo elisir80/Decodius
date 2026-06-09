@@ -510,6 +510,20 @@ Window {
                     baseColor: assistant.alwaysListening ? root.accent : "#10202b"
                     onClicked: assistant.setListening(!assistant.alwaysListening)
                 }
+                // Mani libere (wake-word "Decodius")
+                PillButton {
+                    text: "🎙"
+                    fg: assistant.wakeWord ? "#04121a" : root.accent
+                    baseColor: assistant.wakeWord ? root.accent : "#10202b"
+                    onClicked: assistant.setWakeWord(!assistant.wakeWord)
+                }
+                // Pilota automatico (operatore autonomo)
+                PillButton {
+                    text: "🤖"
+                    fg: assistant.autoPilot ? "#04121a" : "#ff8c42"
+                    baseColor: assistant.autoPilot ? "#ff8c42" : "#10202b"
+                    onClicked: assistant.setAutoPilot(!assistant.autoPilot)
+                }
             }
         }
     }
