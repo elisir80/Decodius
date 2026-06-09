@@ -48,6 +48,7 @@ private:
     void processNextToolCall();         // esegue un tool per volta, poi rilancia
     void runWebSearch(const QJsonObject& args, std::function<void(QString)> done);
     void runPropagazione(std::function<void(QString)> done);
+    void runDxCluster(const QJsonObject& args, std::function<void(QString)> done); // spot DX live (dxwatch)
     void runDecodium(std::function<void(QString)> done);   // stato live del decoder Decodium 4
     void runDecodiumCommand(const QJsonObject& args, std::function<void(QString)> done); // comanda Decodium 4
     void runCreateFile(const QJsonObject& args, std::function<void(QString)> done);

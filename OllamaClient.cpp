@@ -709,6 +709,26 @@ OllamaClient::OllamaClient(QObject* parent) : QObject(parent) {
     };
     m_tools.append(propag);
 
+    // dxcluster: spot DX live dal cluster mondiale (dxwatch), con filtro banda.
+    QJsonObject dxcluster{
+        {"type", "function"},
+        {"function", QJsonObject{
+            {"name", "dxcluster"},
+            {"description",
+             "Recupera gli spot DX recenti dal DX Cluster mondiale (quali stazioni DX sono "
+             "attive ora e su che frequenza, segnalate dagli operatori). Usalo quando l'utente "
+             "chiede 'quali DX ci sono', 'chi e' spottato', 'cosa c'e' in 20 metri', o cerca un "
+             "DX da lavorare. Puoi filtrare per banda."},
+            {"parameters", QJsonObject{
+                {"type", "object"},
+                {"properties", QJsonObject{
+                    {"banda", QJsonObject{{"type", "string"}, {"description", "banda opzionale, es. 20m, 40m, 15m"}}}
+                }}
+            }}
+        }}
+    };
+    m_tools.append(dxcluster);
+
     // callsign: lookup nominativi (prefisso->paese sempre; dettagli USA/HamQTH).
     QJsonObject callsign{
         {"type", "function"},
@@ -993,6 +1013,8 @@ void OllamaClient::processNextToolCall() {
         runWebSearch(args, done);          // asincrono (rete)
     else if (name == QLatin1String("propagazione"))
         runPropagazione(done);             // asincrono (rete)
+    else if (name == QLatin1String("dxcluster"))
+        runDxCluster(args, done);          // asincrono (rete: dxwatch)
     else if (name == QLatin1String("decodium"))
         runDecodium(done);                 // asincrono (API locale Decodium 4)
     else if (name == QLatin1String("decodium_comando"))
@@ -1105,7 +1127,9 @@ void OllamaClient::runPropagazione(std::function<void(QString)> done) {
             return m.hasMatch() ? m.captured(1).trimmed() : QString();
         };
         const QString sfi = pick("solarflux"), a = pick("aindex"), k = pick("kindex"),
-                      ss = pick("sunspots"), upd = pick("updated");
+                      ss = pick("sunspots"), upd = pick("updated"),
+                      aur = pick("aurora"), xray = pick("xray"), muf = pick("muf"),
+                      geo = pick("geomagfield"), sn = pick("signalnoise");
         if (sfi.isEmpty() && a.isEmpty() && k.isEmpty()) {
             done(QStringLiteral("Dati di propagazione non disponibili al momento."));
             return;
@@ -1126,9 +1150,94 @@ void OllamaClient::runPropagazione(std::function<void(QString)> done) {
             .arg(upd.isEmpty() ? QString() : QStringLiteral(", agg. %1").arg(upd),
                  sfi.isEmpty() ? "n/d" : sfi, a.isEmpty() ? "n/d" : a,
                  k.isEmpty() ? "n/d" : k, ss.isEmpty() ? "n/d" : ss);
+        // Dati avanzati: campo geomagnetico, aurora, X-ray, MUF, rumore.
+        QString extra;
+        if (!geo.isEmpty())  extra += QStringLiteral("campo geomagnetico %1; ").arg(geo.trimmed());
+        if (!aur.isEmpty())  extra += QStringLiteral("aurora %1; ").arg(aur.trimmed());
+        if (!xray.isEmpty()) extra += QStringLiteral("X-ray %1; ").arg(xray.trimmed());
+        if (!muf.isEmpty())  extra += QStringLiteral("MUF %1; ").arg(muf.trimmed());
+        if (!sn.isEmpty())   extra += QStringLiteral("rumore %1; ").arg(sn.trimmed());
+        if (!extra.isEmpty())
+            out += QStringLiteral(" Avanzate: %1").arg(extra.trimmed());
         if (!bande.isEmpty())
             out += QStringLiteral(" Condizioni bande: %1").arg(bande.trimmed());
         done(out);
+    });
+}
+
+// Mappa una frequenza (kHz) alla banda amatoriale, per filtrare/etichettare gli spot.
+static QString freqToBand(double khz) {
+    if (khz >= 1800 && khz <= 2000) return QStringLiteral("160m");
+    if (khz >= 3500 && khz <= 4000) return QStringLiteral("80m");
+    if (khz >= 5300 && khz <= 5410) return QStringLiteral("60m");
+    if (khz >= 7000 && khz <= 7300) return QStringLiteral("40m");
+    if (khz >= 10100 && khz <= 10150) return QStringLiteral("30m");
+    if (khz >= 14000 && khz <= 14350) return QStringLiteral("20m");
+    if (khz >= 18068 && khz <= 18168) return QStringLiteral("17m");
+    if (khz >= 21000 && khz <= 21450) return QStringLiteral("15m");
+    if (khz >= 24890 && khz <= 24990) return QStringLiteral("12m");
+    if (khz >= 28000 && khz <= 29700) return QStringLiteral("10m");
+    if (khz >= 50000 && khz <= 54000) return QStringLiteral("6m");
+    if (khz >= 70000 && khz <= 70500) return QStringLiteral("4m");
+    if (khz >= 144000 && khz <= 148000) return QStringLiteral("2m");
+    if (khz >= 430000 && khz <= 440000) return QStringLiteral("70cm");
+    return QString();
+}
+
+// DX Cluster live: spot recenti da dxwatch.com (JSON). Opzionale filtro 'banda'.
+// Risposta dxwatch: {"s":{ "<id>": [spotter, freqKHz, dxCall, info, time, ...], ... }}
+void OllamaClient::runDxCluster(const QJsonObject& args, std::function<void(QString)> done) {
+    const QString bandaWanted = args.value("banda").toString().trimmed().toLower();
+    QNetworkRequest req(QUrl(QStringLiteral("https://www.dxwatch.com/dxsd1/s.php?s=0&r=30")));
+    req.setHeader(QNetworkRequest::UserAgentHeader,
+                  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Decodius/1.4");
+    QNetworkReply* reply = m_net.get(req);
+    QTimer::singleShot(15000, reply, [reply]() { if (reply->isRunning()) reply->abort(); });
+
+    connect(reply, &QNetworkReply::finished, this, [reply, done, bandaWanted]() {
+        reply->deleteLater();
+        if (reply->error() != QNetworkReply::NoError) {
+            done(QStringLiteral("Errore nel recupero del DX Cluster: %1").arg(reply->errorString()));
+            return;
+        }
+        const QJsonObject root = QJsonDocument::fromJson(reply->readAll()).object();
+        const QJsonObject spots = root.value(QStringLiteral("s")).toObject();
+        if (spots.isEmpty()) { done(QStringLiteral("Nessuno spot DX disponibile al momento.")); return; }
+
+        auto deHtml = [](QString s) {
+            s.replace(QStringLiteral("&lt;"), QStringLiteral("<"));
+            s.replace(QStringLiteral("&gt;"), QStringLiteral(">"));
+            s.replace(QStringLiteral("&amp;"), QStringLiteral("&"));
+            return s.trimmed();
+        };
+        QStringList lines;
+        int n = 0;
+        for (auto it = spots.begin(); it != spots.end() && n < 15; ++it) {
+            const QJsonArray a = it.value().toArray();
+            if (a.size() < 5) continue;
+            const QString spotter = a.at(0).toString();
+            const double  khz     = a.at(1).toDouble();
+            const QString dxCall  = a.at(2).toString();
+            const QString info    = deHtml(a.at(3).toString());
+            const QString tempo   = a.at(4).toString();
+            const QString band    = freqToBand(khz);
+            if (!bandaWanted.isEmpty() && band.toLower() != bandaWanted) continue;
+            QString line = QStringLiteral("%1 su %2 kHz%3")
+                .arg(dxCall, QString::number(khz, 'f', 1),
+                     band.isEmpty() ? QString() : QStringLiteral(" (%1)").arg(band));
+            if (!info.isEmpty())    line += QStringLiteral(" \"%1\"").arg(info);
+            if (!spotter.isEmpty()) line += QStringLiteral(" - de %1").arg(spotter);
+            if (!tempo.isEmpty())   line += QStringLiteral(" %1").arg(tempo);
+            lines << line;
+            ++n;
+        }
+        if (lines.isEmpty()) {
+            done(bandaWanted.isEmpty()
+                 ? QStringLiteral("Nessuno spot DX recente.")
+                 : QStringLiteral("Nessuno spot DX recente in %1.").arg(bandaWanted));
+            return;
+        }
+        done(QStringLiteral("Spot DX recenti dal cluster:\n") + lines.join(QStringLiteral("\n")));
     });
 }
 
