@@ -1,0 +1,50 @@
+# --- Build / artefatti ---
+/build/
+/installer/
+*.exe
+*.obj
+*.o
+*.lib
+*.pdb
+*.ilk
+*.exp
+
+# --- Ambienti Python pesanti (venv, modelli, runtime portatili) ---
+xttsenv/
+ttsenv/
+whisper/
+chatterenv/
+kokoro/
+pyedge/
+**/site-packages/
+**/__pycache__/
+*.pyc
+
+# --- Modelli / pesi (troppo grandi per git) ---
+*.onnx
+*.bin
+*.pt
+*.pth
+*.safetensors
+*.ckpt
+piper/*.exe
+piper/*.dll
+piper/espeak-ng-data/
+
+# --- Piper TTS (binari di terze parti, scaricabili a parte) ---
+/piper/
+
+# --- Binari voce locali (scaricabili a parte) ---
+*.wav
+*.mp3
+
+# --- Log / temporanei ---
+*.log
+aqtinstall.log
+*.tmp
+.DS_Store
+Thumbs.db
+
+# --- Config locali con dati personali (NON pubblicare) ---
+decodius_hamqth.txt
+call.txt

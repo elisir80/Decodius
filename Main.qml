@@ -1,0 +1,604 @@
+import QtQuick
+import QtQuick.Controls.Basic
+import QtQuick.Layouts
+import QtQuick.Effects
+import Decodius
+
+Window {
+    id: root
+    width: 1040; height: 820
+    visible: true
+    color: "#04060c"
+    title: "DECODIUS" + (assistant.callSign.length ? " — " + assistant.callSign : "")
+
+    Shortcut { sequences: ["Escape"]; onActivated: assistant.interrupt() }
+
+    // Stato -> colore d'accento ("umore" di Decodius)
+    property color accent: {
+        switch (assistant.state) {
+        case Assistant.Listening: return "#2de2ff";
+        case Assistant.Thinking:  return "#ffb02e";
+        case Assistant.Speaking:  return "#3dffa0";
+        default:                  return "#36b6e0";
+        }
+    }
+    property string stateText: {
+        switch (assistant.state) {
+        case Assistant.Listening: return "IN ASCOLTO";
+        case Assistant.Thinking:  return "ELABORO";
+        case Assistant.Speaking:  return "RISPONDO";
+        default:                  return "PRONTO";
+        }
+    }
+    Behavior on accent { ColorAnimation { duration: 450; easing.type: Easing.InOutQuad } }
+
+    AudioAnalyzer { id: analyzer }
+    Assistant     { id: assistant }
+    Component.onCompleted: {
+        analyzer.start()
+        if (assistant.needsCallSign) callDialog.open()   // primo avvio: chiedi il nominativo
+        else showWelcome()
+    }
+    function showWelcome() {
+        var c = assistant.callSign.length ? assistant.callSign : "OM"
+        chatModel.append({ role: "assistant",
+            body: "Ciao **" + c + "**, sono **Decodius**, il tuo assistente radioamatoriale. Chiedimi qualcosa su bande, propagazione, antenne, codice Morse, satelliti, FT8/FT2, normativa…" })
+    }
+
+    // Pulsante "pill" riutilizzabile (componente inline)
+    component PillButton: Button {
+        property color baseColor: "#10202b"
+        property color fg: root.accent
+        Layout.preferredHeight: 40
+        leftPadding: 16; rightPadding: 16
+        background: Rectangle {
+            radius: 12; color: parent.down ? Qt.darker(baseColor, 1.2) : baseColor
+            border.color: root.accent; border.width: 1
+            scale: parent.down ? 0.95 : 1.0
+            Behavior on scale { NumberAnimation { duration: 90 } }
+        }
+        contentItem: Text { text: parent.text; color: fg; font.bold: true
+            font.pixelSize: 14; horizontalAlignment: Text.AlignHCenter
+            verticalAlignment: Text.AlignVCenter }
+    }
+
+    // Chat: storico conversazione
+    ListModel { id: chatModel }
+    property int asstIndex: -1
+    function send() {
+        var t = input.text.trim()
+        if (t.length === 0 && !assistant.hasImage) return
+        chatModel.append({ role: "user", body: t.length ? t : "🖼️ (immagine allegata)" })
+        chatModel.append({ role: "assistant", body: "" })
+        asstIndex = chatModel.count - 1
+        assistant.sendText(input.text)
+        input.text = ""
+    }
+    Connections {
+        target: assistant
+        function onLastResponseChanged() {
+            if (root.asstIndex >= 0 && root.asstIndex < chatModel.count)
+                chatModel.setProperty(root.asstIndex, "body", assistant.lastResponse)
+        }
+        function onConfirmationRequested(title, detail) {
+            confirmDialog.title = title; confirmDetail.text = detail; confirmDialog.open()
+        }
+    }
+
+    // ───────────────── SFONDO: aurora animata (blob sfocati) ─────────────────
+    Rectangle {
+        anchors.fill: parent
+        gradient: Gradient {
+            GradientStop { position: 0.0; color: "#0a1320" }
+            GradientStop { position: 1.0; color: "#04060c" }
+        }
+    }
+    Item {
+        id: aurora
+        anchors.fill: parent
+        visible: false
+        layer.enabled: true
+        Repeater {
+            model: 4
+            delegate: Rectangle {
+                property real baseX: (index * 0.27 + 0.1) * root.width
+                property real baseY: (index % 2 === 0 ? 0.25 : 0.7) * root.height
+                width: 360 + index * 90; height: width; radius: width / 2
+                x: baseX - width/2; y: baseY - height/2
+                color: index % 2 === 0 ? root.accent : Qt.lighter(root.accent, 1.4)
+                opacity: 0.22
+                // movimento morbido e lento
+                XAnimator on x { from: baseX - width/2 - 80; to: baseX - width/2 + 80
+                    duration: 9000 + index*2500; loops: Animation.Infinite; easing.type: Easing.InOutSine }
+                YAnimator on y { from: baseY - height/2 - 60; to: baseY - height/2 + 60
+                    duration: 11000 + index*2200; loops: Animation.Infinite; easing.type: Easing.InOutSine }
+                scale: 1.0 + analyzer.rms * 0.35
+                Behavior on scale { NumberAnimation { duration: 160 } }
+            }
+        }
+    }
+    MultiEffect {
+        anchors.fill: aurora
+        source: aurora
+        blurEnabled: true
+        blur: 1.0
+        blurMax: 64
+        opacity: 0.9
+    }
+
+    ColumnLayout {
+        anchors.fill: parent
+        anchors.margins: 22
+        spacing: 16
+
+        // ───────────────── HEADER: ORB centrale pulsante ─────────────────
+        Item {
+            Layout.fillWidth: true
+            Layout.preferredHeight: 360
+
+            // wordmark in alto a sinistra
+            Column {
+                anchors.left: parent.left; anchors.top: parent.top; spacing: 2
+                Text { text: "DECODIUS"; color: "#eaf6fb"; font.bold: true
+                       font.pixelSize: 20; font.letterSpacing: 4 }
+                Text { text: "assistente radioamatoriale" + (assistant.callSign.length ? " · " + assistant.callSign : "")
+                       color: "#6f93a4"; font.pixelSize: 11; font.letterSpacing: 1 }
+            }
+
+            // ORB (più grande)
+            Item {
+                id: orb
+                width: 330; height: 330
+                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.top: parent.top; anchors.topMargin: 4
+
+                // respiro continuo (pulse) + reazione audio
+                property real pulse: 0
+                property real react: analyzer.rms
+                property bool talking: assistant.state === Assistant.Speaking
+                                       || assistant.state === Assistant.Listening
+                SequentialAnimation on pulse {
+                    loops: Animation.Infinite
+                    NumberAnimation { to: 1; duration: 1700; easing.type: Easing.InOutSine }
+                    NumberAnimation { to: 0; duration: 1700; easing.type: Easing.InOutSine }
+                }
+                Behavior on react { NumberAnimation { duration: 120; easing.type: Easing.OutQuad } }
+
+                // ONDE CONCENTRICHE (ripple): si propagano mentre Decodius parla
+                Repeater {
+                    model: 4
+                    delegate: Rectangle {
+                        id: rip
+                        anchors.centerIn: parent
+                        width: 170; height: 170; radius: 85
+                        color: "transparent"
+                        border.color: Qt.lighter(root.accent, 1.2); border.width: 2
+                        opacity: 0; scale: 0.7
+                        visible: orb.talking
+                        SequentialAnimation {
+                            running: orb.talking
+                            loops: Animation.Infinite
+                            PauseAnimation { duration: index * 520 }
+                            ParallelAnimation {
+                                NumberAnimation { target: rip; property: "scale"; from: 0.7; to: 2.5; duration: 2000; easing.type: Easing.OutQuad }
+                                NumberAnimation { target: rip; property: "opacity"; from: 0.55; to: 0.0; duration: 2000; easing.type: Easing.OutQuad }
+                            }
+                        }
+                    }
+                }
+
+                // aloni concentrici soffici
+                Repeater {
+                    model: 4
+                    delegate: Rectangle {
+                        anchors.centerIn: parent
+                        width: 190 + index*36; height: width; radius: width/2
+                        color: Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.07 - index*0.014)
+                        scale: 1.0 + orb.pulse*(0.05+index*0.03) + orb.react*(0.6+index*0.35)
+                    }
+                }
+
+                // anelli energetici rotanti
+                Repeater {
+                    model: 2
+                    delegate: Rectangle {
+                        anchors.centerIn: parent
+                        width: 220 + index*46; height: width; radius: width/2
+                        color: "transparent"
+                        border.color: Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.28 - index*0.10)
+                        border.width: index === 0 ? 1.5 : 1
+                        RotationAnimation on rotation { from: 0; to: index % 2 ? 360 : -360
+                            duration: 16000 + index*9000; loops: Animation.Infinite }
+                        Repeater {
+                            model: 84
+                            delegate: Item { anchors.fill: parent; rotation: index*(360/84)
+                                Rectangle { width: 1.6; height: (index%6===0)?9:4; radius:1
+                                    color: Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.20)
+                                    x: parent.width/2 - width/2; y: 1 } }
+                        }
+                    }
+                }
+
+                // PARTICELLE in orbita con SCIA luminosa
+                Repeater {
+                    model: 7
+                    delegate: Item {
+                        id: orbit
+                        anchors.centerIn: parent; width: orb.width; height: orb.height
+                        property int pidx: index
+                        property real rad: orb.width/2 - (14 + (pidx % 3)*26)
+                        RotationAnimation on rotation { from: pidx*51
+                            to: pidx*51 + ((pidx % 2) ? 360 : -360)
+                            duration: 4200 + pidx*1300; loops: Animation.Infinite }
+                        Repeater {
+                            model: 9   // testa + scia lunga
+                            delegate: Item {
+                                anchors.fill: parent
+                                rotation: index * ((orbit.pidx % 2) ? 3.5 : -3.5)
+                                Rectangle {
+                                    width: 9 - index*0.7; height: width; radius: width/2
+                                    color: Qt.lighter(root.accent, 1.8)
+                                    x: parent.width/2 - width/2
+                                    y: parent.height/2 - orbit.rad
+                                    opacity: 0.95 - index*0.10
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // anello reattivo sottile (feedback voce)
+                Rectangle {
+                    anchors.centerIn: parent; width: 176; height: 176; radius: 88
+                    color: "transparent"
+                    border.color: Qt.lighter(root.accent, 1.3); border.width: 2
+                    opacity: 0.4 + orb.react*0.6
+                    scale: 1.0 + orb.react*0.5
+                }
+
+                // SFERA centrale (look 3D) con PLASMA rotante e ONDA SINUSOIDALE interna
+                Rectangle {
+                    id: sphere
+                    anchors.centerIn: parent; width: 158; height: 158; radius: 79
+                    scale: 1.0 + orb.pulse*0.05 + orb.react*0.55
+                    gradient: Gradient {
+                        GradientStop { position: 0.0; color: Qt.lighter(root.accent, 1.9) }
+                        GradientStop { position: 0.55; color: root.accent }
+                        GradientStop { position: 1.0; color: Qt.darker(root.accent, 1.5) }
+                    }
+                    // PLASMA: due dischi-gradiente che ruotano in versi opposti.
+                    // Sono cerchi (radius=raggio) -> ruotando restano dentro la sfera.
+                    Rectangle {
+                        anchors.fill: parent; radius: width/2; opacity: 0.55
+                        gradient: Gradient {
+                            GradientStop { position: 0.0; color: Qt.rgba(1,1,1,0.38) }
+                            GradientStop { position: 0.5; color: Qt.rgba(1,1,1,0.0) }
+                            GradientStop { position: 1.0; color: Qt.rgba(0,0.10,0.16,0.45) }
+                        }
+                        RotationAnimation on rotation { from: 0; to: 360; duration: 9000; loops: Animation.Infinite }
+                    }
+                    Rectangle {
+                        anchors.fill: parent; radius: width/2; opacity: 0.40
+                        gradient: Gradient {
+                            GradientStop { position: 0.0; color: Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.0) }
+                            GradientStop { position: 0.5; color: Qt.lighter(root.accent, 1.6) }
+                            GradientStop { position: 1.0; color: Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.0) }
+                        }
+                        RotationAnimation on rotation { from: 360; to: 0; duration: 13000; loops: Animation.Infinite }
+                    }
+                    // highlight lucido in alto a sinistra
+                    Rectangle {
+                        x: 34; y: 24; width: 58; height: 38; radius: 26
+                        color: Qt.rgba(1,1,1,0.40); rotation: -20
+                    }
+                    // ONDA SINUSOIDALE continua (Canvas), ampiezza reattiva all'audio
+                    Canvas {
+                        id: wave
+                        anchors.centerIn: parent
+                        width: 122; height: 64
+                        property real phase: 0
+                        property real amp: 4 + analyzer.rms * 40
+                        Behavior on amp { NumberAnimation { duration: 110 } }
+                        NumberAnimation on phase {
+                            from: 0; to: 2 * Math.PI; duration: 1500; loops: Animation.Infinite
+                        }
+                        onPhaseChanged: requestPaint()
+                        onPaint: {
+                            var ctx = getContext("2d");
+                            ctx.reset();
+                            ctx.lineWidth = 2.6;
+                            ctx.strokeStyle = "rgba(3,18,24,0.9)";
+                            ctx.lineJoin = "round";
+                            ctx.beginPath();
+                            for (var x = 0; x <= width; x++) {
+                                var t = x / width;
+                                var env = Math.sin(t * Math.PI);          // smorza ai bordi
+                                var y = height/2 + Math.sin(t*Math.PI*4 + phase) * amp * env;
+                                if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+                            }
+                            ctx.stroke();
+                        }
+                    }
+                }
+
+                layer.enabled: true
+                MouseArea { anchors.fill: parent; onClicked: assistant.interrupt() }
+            }
+            // BLOOM dell'orb
+            MultiEffect {
+                anchors.fill: orb; source: orb
+                blurEnabled: true; blur: 0.8; blurMax: 40
+                brightness: 0.12; saturation: 0.25; opacity: 0.6
+                z: -1
+            }
+
+            // pill di stato sotto l'orb
+            Rectangle {
+                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.bottom: parent.bottom
+                radius: 14; height: 30; width: pill.implicitWidth + 34
+                color: Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.16)
+                border.color: root.accent; border.width: 1
+                Row {
+                    id: pill; anchors.centerIn: parent; spacing: 8
+                    Rectangle { width: 9; height: 9; radius: 4.5; color: root.accent
+                        anchors.verticalCenter: parent.verticalCenter
+                        SequentialAnimation on opacity { loops: Animation.Infinite
+                            NumberAnimation { to: 0.3; duration: 700 }
+                            NumberAnimation { to: 1.0; duration: 700 } }
+                    }
+                    Text { text: root.stateText; color: root.accent; font.bold: true
+                           font.pixelSize: 12; font.letterSpacing: 2
+                           anchors.verticalCenter: parent.verticalCenter }
+                }
+            }
+        }
+
+        // ───────────────── CHAT (bolle + streaming) ─────────────────
+        Rectangle {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            radius: 18
+            color: Qt.rgba(1, 1, 1, 0.03)
+            border.color: Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.18)
+            border.width: 1
+
+            ListView {
+                id: chat
+                anchors.fill: parent
+                anchors.margins: 14
+                model: chatModel
+                spacing: 14
+                clip: true
+                boundsBehavior: Flickable.StopAtBounds
+                ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+                onCountChanged: positionViewAtEnd()
+                onContentHeightChanged: positionViewAtEnd()
+
+                // animazione d'ingresso delle bolle: salgono + sfumano + scalano
+                add: Transition {
+                    NumberAnimation { property: "opacity"; from: 0; to: 1; duration: 320; easing.type: Easing.OutCubic }
+                    NumberAnimation { property: "y"; from: 26; duration: 360; easing.type: Easing.OutCubic }
+                    NumberAnimation { property: "scale"; from: 0.94; to: 1; duration: 320; easing.type: Easing.OutBack }
+                }
+                displaced: Transition { NumberAnimation { properties: "y"; duration: 220; easing.type: Easing.OutCubic } }
+
+                delegate: Item {
+                    width: chat.width
+                    height: bubble.height + 6
+                    property bool isUser: role === "user"
+                    property bool thinking: !isUser && body.length === 0
+
+                    Rectangle {
+                        id: bubble
+                        anchors.right: isUser ? parent.right : undefined
+                        anchors.left: isUser ? undefined : parent.left
+                        width: Math.min(chat.width * 0.80, contentCol.implicitWidth + 30)
+                        height: contentCol.implicitHeight + 22
+                        radius: 16
+                        color: isUser ? Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.16)
+                                      : Qt.rgba(1, 1, 1, 0.045)
+                        border.width: 1
+                        border.color: isUser ? Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.55)
+                                             : Qt.rgba(1, 1, 1, 0.10)
+
+                        Column {
+                            id: contentCol
+                            anchors.left: parent.left; anchors.right: parent.right
+                            anchors.top: parent.top
+                            anchors.margins: 11
+                            spacing: 4
+
+                            Text {
+                                text: isUser ? "TU" : "DECODIUS"
+                                color: isUser ? root.accent : Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.85)
+                                font.bold: true; font.pixelSize: 10; font.letterSpacing: 1.5
+                            }
+
+                            // indicatore "sta scrivendo" (tre puntini) finché il corpo è vuoto
+                            Row {
+                                visible: thinking
+                                spacing: 6
+                                Repeater {
+                                    model: 3
+                                    delegate: Rectangle {
+                                        width: 9; height: 9; radius: 4.5; color: root.accent
+                                        SequentialAnimation on opacity {
+                                            loops: Animation.Infinite
+                                            PauseAnimation { duration: index * 180 }
+                                            NumberAnimation { to: 1.0; duration: 280 }
+                                            NumberAnimation { to: 0.25; duration: 280 }
+                                            PauseAnimation { duration: (2 - index) * 180 }
+                                        }
+                                    }
+                                }
+                            }
+
+                            Text {
+                                visible: !thinking
+                                width: Math.min(chat.width * 0.80 - 22, implicitWidth)
+                                text: body
+                                color: "#e7f3f8"
+                                wrapMode: Text.WordWrap
+                                textFormat: Text.MarkdownText
+                                font.pixelSize: 15; lineHeight: 1.15
+                                onLinkActivated: (l) => Qt.openUrlExternally(l)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ───────────────── INPUT BAR ─────────────────
+        Rectangle {
+            Layout.fillWidth: true
+            Layout.preferredHeight: 58
+            radius: 16
+            color: Qt.rgba(1, 1, 1, 0.04)
+            border.width: 1
+            border.color: input.activeFocus
+                ? root.accent
+                : Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.25)
+            Behavior on border.color { ColorAnimation { duration: 200 } }
+
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: 16; anchors.rightMargin: 10
+                anchors.topMargin: 8; anchors.bottomMargin: 8
+                spacing: 10
+
+                TextField {
+                    id: input
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    placeholderText: "Chiedi a Decodius…"
+                    placeholderTextColor: "#5e7c8a"
+                    color: "#eaf6fb"; font.pixelSize: 15
+                    background: Item {}
+                    verticalAlignment: TextInput.AlignVCenter
+                    onAccepted: send()
+                }
+
+                Button {
+                    text: "Invia ➤"
+                    onClicked: send()
+                    Layout.preferredHeight: 40; leftPadding: 18; rightPadding: 18
+                    background: Rectangle { radius: 12; scale: parent.down ? 0.95 : 1.0
+                        gradient: Gradient {
+                            GradientStop { position: 0.0; color: Qt.lighter(root.accent, 1.3) }
+                            GradientStop { position: 1.0; color: root.accent } }
+                        Behavior on scale { NumberAnimation { duration: 90 } } }
+                    contentItem: Text { text: parent.text; color: "#04121a"; font.bold: true
+                        font.pixelSize: 14; horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter }
+                }
+                PillButton {
+                    text: "⏹"; fg: "#ff5d72"
+                    visible: assistant.state === Assistant.Thinking || assistant.state === Assistant.Speaking
+                    onClicked: assistant.interrupt()
+                }
+                PillButton {
+                    text: assistant.hasImage ? "📷✓" : "📷"
+                    fg: assistant.hasImage ? "#04121a" : root.accent
+                    baseColor: assistant.hasImage ? root.accent : "#10202b"
+                    onClicked: if (assistant.hasImage) assistant.clearImage()
+                }
+                PillButton {
+                    text: assistant.alwaysListening ? "🎤" : "🎤"
+                    fg: assistant.alwaysListening ? "#04121a" : root.accent
+                    baseColor: assistant.alwaysListening ? root.accent : "#10202b"
+                    onClicked: assistant.setListening(!assistant.alwaysListening)
+                }
+            }
+        }
+    }
+
+    // ───────── Drop immagine (vision) ─────────
+    DropArea {
+        anchors.fill: parent
+        onEntered: (drag) => { if (drag.hasUrls) dropHint.visible = true }
+        onExited: dropHint.visible = false
+        onDropped: (drop) => {
+            dropHint.visible = false
+            if (drop.hasUrls && drop.urls.length > 0) { assistant.attachImage(drop.urls[0]); drop.accept() }
+        }
+    }
+    Rectangle {
+        id: dropHint; anchors.fill: parent; visible: false
+        color: Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.12)
+        border.color: root.accent; border.width: 2; radius: 16
+        Text { anchors.centerIn: parent; text: "Rilascia l'immagine per allegarla a Decodius"
+               color: root.accent; font.bold: true; font.pixelSize: 20 }
+    }
+
+    // ───────── Dialog conferma strumenti in scrittura ─────────
+    Dialog {
+        id: confirmDialog; modal: true; anchors.centerIn: parent
+        width: Math.min(root.width - 80, 640); padding: 18; closePolicy: Popup.NoAutoClose
+        background: Rectangle { radius: 14; color: "#0c141d"
+            border.color: Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.5); border.width: 1 }
+        header: Text { text: confirmDialog.title; color: root.accent; font.bold: true; font.pixelSize: 16; padding: 14 }
+        contentItem: Flickable {
+            implicitHeight: Math.min(contentHeight, 320); contentHeight: confirmDetail.height; clip: true
+            Text { id: confirmDetail; width: confirmDialog.availableWidth; color: "#cfe9f2"
+                   wrapMode: Text.WrapAtWordBoundaryOrAnywhere; font.pixelSize: 13; font.family: "Consolas" }
+        }
+        footer: RowLayout {
+            spacing: 10; Layout.fillWidth: true
+            Item { Layout.fillWidth: true }
+            Button { text: "Annulla"; onClicked: { assistant.resolveConfirmation(false); confirmDialog.close() }
+                background: Rectangle { radius: 8; color: "#0c141d"; border.color: "#7a8a95"; border.width: 1 }
+                contentItem: Text { text: parent.text; color: "#cfe9f2"; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter } }
+            Button { text: "Conferma"; onClicked: { assistant.resolveConfirmation(true); confirmDialog.close() }
+                background: Rectangle { radius: 8; color: root.accent; opacity: 0.9 }
+                contentItem: Text { text: parent.text; color: "#04121a"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                Layout.rightMargin: 14; Layout.bottomMargin: 12 }
+            Layout.bottomMargin: 6
+        }
+    }
+
+    // ───────── Primo avvio: personalizzazione del nominativo (Call/QRZ) ─────────
+    Dialog {
+        id: callDialog; modal: true; anchors.centerIn: parent
+        width: Math.min(root.width - 120, 460); padding: 22
+        closePolicy: Popup.NoAutoClose
+        background: Rectangle { radius: 16; color: "#0c141d"
+            border.color: root.accent; border.width: 1 }
+        contentItem: ColumnLayout {
+            spacing: 14
+            Text { text: "Benvenuto in Decodius"; color: "#eaf6fb"; font.bold: true; font.pixelSize: 20 }
+            Text { text: "Inserisci il tuo nominativo (Call/QRZ) per personalizzare l'assistente:"
+                   color: "#9fc0cf"; font.pixelSize: 13; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+            TextField {
+                id: callInput; Layout.fillWidth: true
+                placeholderText: "es. IK1ABC"; placeholderTextColor: "#5e7c8a"
+                color: "#eaf6fb"; font.pixelSize: 18; font.capitalization: Font.AllUppercase
+                font.letterSpacing: 2; horizontalAlignment: TextInput.AlignHCenter
+                background: Rectangle { radius: 10; color: "#0a131c"
+                    border.color: callInput.activeFocus ? root.accent
+                        : Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.35); border.width: 1 }
+                onAccepted: callDialog.confirmCall()
+                Component.onCompleted: forceActiveFocus()
+            }
+            Button {
+                text: "Inizia ▸"; Layout.fillWidth: true; Layout.preferredHeight: 44
+                enabled: callInput.text.trim().length >= 3
+                onClicked: callDialog.confirmCall()
+                background: Rectangle { radius: 12; opacity: parent.enabled ? 1 : 0.4
+                    gradient: Gradient {
+                        GradientStop { position: 0.0; color: Qt.lighter(root.accent, 1.3) }
+                        GradientStop { position: 1.0; color: root.accent } } }
+                contentItem: Text { text: parent.text; color: "#04121a"; font.bold: true; font.pixelSize: 15
+                    horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+            }
+        }
+        function confirmCall() {
+            var c = callInput.text.trim()
+            if (c.length < 3) return
+            assistant.setCallSign(c)
+            callDialog.close()
+            showWelcome()
+        }
+    }
+}

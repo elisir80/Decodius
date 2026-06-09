@@ -1,0 +1,48 @@
+DECODIUS — Assistente vocale radioamatoriale
+=============================================
+
+GRAZIE per aver installato Decodius!
+
+PRIMO AVVIO
+-----------
+Al primo avvio ti verrà chiesto il tuo NOMINATIVO (Call/QRZ): inseriscilo
+per personalizzare l'assistente. Potrai poi scrivergli e ti risponderà a voce.
+
+PREREQUISITO: OLLAMA (il "cervello")
+------------------------------------
+Decodius usa Ollama per il modello linguistico.
+1) Installa Ollama da:  https://ollama.com/download
+2) Scegli il modello in:  <cartella installazione>\decodius_model.txt
+   - Per un modello in CLOUD (veloce, account Ollama):  gpt-oss:120b-cloud
+     (accedi con:  ollama signin)
+   - Per un modello LOCALE (offline):  scrivi ad es.  gemma4:latest
+     e scaricalo con:  ollama pull gemma4:latest
+3) Riavvia Decodius.
+
+VOCE
+----
+La voce (Microsoft edge-tts "Giuseppe", italiano) è inclusa e funziona via
+Internet, senza configurazione. Richiede connessione di rete.
+
+COLLEGAMENTO A DECODIUM 4 (opzionale)
+-------------------------------------
+Decodius puo' leggere in tempo reale il tuo decoder DECODIUM 4 e comandarlo
+a voce. Per attivarlo devi accendere il Web Server DENTRO Decodium (di default
+e' spento). Istruzioni passo-passo nel file:  LEGGIMI-Decodium.txt
+(o menu Start -> Decodius -> "Collega Decodium").
+In breve: Decodium -> Settings -> tab "Decodifica" -> "Abilita Web Server".
+Decodius e Decodium devono girare sullo STESSO PC.
+
+PERSONALIZZARE
+--------------
+- Nominativo: chiesto al primo avvio (salvato in %APPDATA%\Decodius).
+- Modello: file  decodius_model.txt  nella cartella di installazione.
+- Conoscenza radioamatoriale: file  decodius_ham_kb.md  (modificabile).
+
+REQUISITI
+---------
+- Windows 10/11 64-bit
+- Connessione Internet (per cervello cloud e voce)
+- Ollama installato
+
+73!  —  IU8LMC

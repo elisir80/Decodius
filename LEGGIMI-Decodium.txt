@@ -1,0 +1,80 @@
+============================================================
+  DECODIUS  +  DECODIUM 4  —  COME COLLEGARLI
+============================================================
+
+Decodius puo' leggere in tempo reale il tuo decoder DECODIUM 4
+(stato, frequenze, modo, chi sta chiamando CQ) e — se vuoi —
+anche COMANDARLO a voce (sposta la RX, cambia modo/banda, ecc.).
+
+Perche' funzioni devi accendere DENTRO DECODIUM due servizi
+(di default sono SPENTI). Bastano pochi clic, una volta sola.
+
+IMPORTANTE: Decodius e Decodium devono girare sullo STESSO PC.
+Decodius parla con Decodium in locale (127.0.0.1): non si
+collega via Internet al Decodium di altre persone.
+
+
+------------------------------------------------------------
+ 1) LETTURA  (obbligatorio)  —  porta 8080
+------------------------------------------------------------
+Serve per: "chi chiama CQ?", "che modo e' impostato?",
+           "su che frequenza sono?", lettura dei decode.
+
+In DECODIUM:
+  Settings  ->  tab "Decodifica"
+  ->  sezione "REMOTE WEB SERVER (iPad / mobile PWA)"
+  ->  spunta  "Abilita Web Server"
+  ->  Porta TCP:  8080   (lasciala cosi')
+
+Fatto. Decodium genera da solo il codice di accesso (token):
+Decodius lo legge in automatico, non devi copiare nulla.
+
+
+------------------------------------------------------------
+ 2) COMANDI A VOCE  (opzionale)  —  porta 19091
+------------------------------------------------------------
+Serve per: "sposta la RX a 1500", "passa a FT4",
+           "vai in 20 metri", ecc.
+
+In DECODIUM:
+  Settings  ->  General
+  ->  sezione "Remote Web Dashboard (LAN)"
+  ->  spunta  "Enable remote web dashboard"
+  ->  WS bind address:  127.0.0.1     <-- IMPORTANTE
+  ->  HTTP port:        19091
+  ->  Username:         admin   (lascia cosi')
+  ->  Access token:     LASCIALO VUOTO  (su 127.0.0.1 non serve)
+  ->  OK
+  ->  RIAVVIA DECODIUM
+
+Nota: il campo "WS bind" DEVE essere 127.0.0.1.
+Se lo lasci 0.0.0.0 senza token, Decodium disabilita il
+servizio per sicurezza e i comandi non partono.
+
+
+------------------------------------------------------------
+ PROVA
+------------------------------------------------------------
+1. Avvia Decodium (con i servizi sopra accesi).
+2. Avvia Decodius.
+3. In Decodius scrivi/di':
+      "chi chiama CQ?"            (lettura)
+      "sposta la RX a 1500"      (comando)
+
+Se Decodius dice ancora che il server web non e' attivo:
+  - controlla di aver messo la spunta su "Abilita Web Server";
+  - assicurati che Decodium sia APERTO mentre usi Decodius;
+  - per i comandi, ricontrolla WS bind = 127.0.0.1 e riavvia
+    Decodium.
+
+
+------------------------------------------------------------
+ PRIVACY / SICUREZZA
+------------------------------------------------------------
+Tutto resta sul tuo PC: i servizi ascoltano solo in locale
+(127.0.0.1). Nessun dato del tuo Decodium viene inviato in
+rete da questa configurazione.
+
+============================================================
+ 73 de IU8LMC  —  Decodius
+============================================================

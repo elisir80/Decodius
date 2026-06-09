@@ -1,0 +1,701 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DECODIUS — IU8LMC</title>
+<style>
+  :root{
+    --accent:#1f8fb5;
+    --bg0:#0a1018;
+    --bg1:#05070d;
+    --panel:#0c141d;
+    --text:#cfe9f2;
+  }
+  *{ box-sizing:border-box; }
+  html,body{ height:100%; margin:0; }
+  body{
+    background:radial-gradient(circle at 50% 40%, var(--bg0), var(--bg1));
+    color:var(--text);
+    font-family:"Segoe UI", system-ui, sans-serif;
+    display:flex; flex-direction:column;
+    overflow:hidden;
+  }
+  header{
+    display:flex; align-items:center; gap:10px;
+    padding:10px 18px; font-weight:600; letter-spacing:2px; font-size:13px;
+    color:var(--accent);
+  }
+  header .dot{ width:10px; height:10px; border-radius:50%; background:var(--accent);
+    box-shadow:0 0 12px var(--accent); transition:background .3s, box-shadow .3s; }
+  header .spacer{ flex:1; }
+  header input{
+    background:var(--panel); color:var(--text); border:1px solid rgba(255,255,255,.12);
+    border-radius:6px; padding:4px 8px; font-size:12px; width:150px;
+  }
+  header label{ font-size:11px; opacity:.65; letter-spacing:1px; }
+
+  #stage{ flex:1; position:relative; }
+  canvas{ position:absolute; inset:0; width:100%; height:100%; }
+
+  #bottom{ padding:0 24px 22px; display:flex; flex-direction:column; gap:14px; }
+  #response{
+    background:var(--panel); border:1px solid color-mix(in srgb, var(--accent) 25%, transparent);
+    border-radius:10px; height:104px; overflow-y:auto; padding:12px 14px;
+    font-size:15px; line-height:1.45; white-space:pre-wrap; word-wrap:break-word;
+    transition:border-color .3s;
+  }
+  #response.placeholder{ opacity:.6; }
+  #response b, #response strong{ color:#eaf6fb; }
+  #row{ display:flex; gap:10px; }
+  #input{
+    flex:1; background:var(--panel); color:#eaf6fb;
+    border:1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+    border-radius:8px; padding:10px 12px; font-size:15px; outline:none;
+    transition:border-color .3s;
+  }
+  #input::placeholder{ color:#6b8290; }
+  button{
+    border:none; border-radius:8px; padding:0 18px; font-weight:700; font-size:14px;
+    cursor:pointer; transition:filter .15s, background .3s, color .3s, border-color .3s;
+    min-height:42px;
+  }
+  button:hover{ filter:brightness(1.12); }
+  #send{ background:var(--accent); color:#04121a; }
+  #mic{ background:var(--panel); color:var(--accent);
+    border:1px solid var(--accent); }
+  #mic.on{ background:var(--accent); color:#04121a; }
+  .err{ color:#ff7a7a; }
+
+  /* Overlay per le azioni file (richiede un gesto utente, funge da conferma) */
+  #overlay{
+    position:fixed; inset:0; display:none; align-items:center; justify-content:center;
+    background:rgba(2,5,9,.66); backdrop-filter:blur(3px); z-index:50;
+  }
+  #overlayCard{
+    width:min(640px, 90vw); max-height:80vh; overflow:auto;
+    background:var(--panel); border:1px solid color-mix(in srgb, var(--accent) 50%, transparent);
+    border-radius:12px; padding:20px;
+  }
+  #overlayCard h3{ margin:0 0 12px; color:var(--accent); letter-spacing:1px; }
+  #overlayDesc{ white-space:pre-wrap; font-family:Consolas,monospace; font-size:13px; line-height:1.4; }
+  #overlayBtns{ display:flex; gap:10px; justify-content:flex-end; margin-top:18px; }
+</style>
+</head>
+<body>
+  <header>
+    <span class="dot" id="statusDot"></span>
+    <span>DECODIUS — IU8LMC</span>
+    <span id="stateLabel" style="opacity:.7"></span>
+    <span class="spacer"></span>
+    <label>host</label>
+    <input id="host" value="http://localhost:11434" spellcheck="false">
+    <label>modello</label>
+    <input id="model" value="gemma4:latest" spellcheck="false">
+  </header>
+
+  <div id="stage"><canvas id="cv"></canvas></div>
+
+  <div id="overlay">
+    <div id="overlayCard">
+      <h3 id="overlayTitle">Decodius richiede un'azione</h3>
+      <div id="overlayDesc"></div>
+      <div id="overlayBtns">
+        <button id="overlayCancel" style="background:var(--panel);border:1px solid #7a8a95;color:var(--text)">Annulla</button>
+        <button id="overlayBtn" style="background:var(--accent);color:#04121a">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="bottom">
+    <div id="response" class="placeholder">Scrivi un comando qui sotto. Decodius gira in locale su gemma4:latest.</div>
+    <div id="row">
+      <input id="input" placeholder="Chiedi a Decodius…" autocomplete="off">
+      <button id="send">Invia</button>
+      <button id="mic">○ Mic</button>
+    </div>
+  </div>
+
+<script>
+"use strict";
+/* ============================================================
+   DECODIUS — versione web (single-file).
+   Microfono → Web Audio (FFT) → visualizzatore Jarvis (canvas)
+   Testo → Ollama /api/chat (streaming NDJSON) → risposta
+   Voce → Web Speech API (sintesi, frase per frase)
+   Mic  → Web Speech Recognition (voce → testo)
+   ============================================================ */
+
+// ---------- Stato / persona ----------
+const SYSTEM_PROMPT =
+  "Ti chiami Decodius. Sei l'assistente personale di Martino, radioamatore (IU8LMC) " +
+  "e sviluppatore. Giri in locale sul suo PC, senza cloud. " +
+  "Rispondi SEMPRE in italiano, in modo conciso e diretto: le risposte vengono lette ad alta voce. " +
+  "Niente elenchi o markdown quando parli: frasi brevi e naturali, una o due quando bastano. " +
+  "Tono pratico e cordiale. Se non sai qualcosa, dillo con onestà.";
+
+const State = { Idle:"Idle", Listening:"Listening", Thinking:"Thinking", Speaking:"Speaking" };
+const ACCENT = { Idle:"#1f8fb5", Listening:"#2de2ff", Thinking:"#ffb02e", Speaking:"#3dffa0" };
+const LABEL  = { Idle:"PRONTO", Listening:"IN ASCOLTO", Thinking:"ELABORO…", Speaking:"RISPONDO" };
+
+let state = State.Idle;
+let accent = ACCENT.Idle;
+
+const $ = id => document.getElementById(id);
+const elResp = $("response"), elInput = $("input"), elDot = $("statusDot"), elStateLabel = $("stateLabel");
+
+function hexToRgb(h){ const n=parseInt(h.slice(1),16); return [n>>16&255, n>>8&255, n&255]; }
+function setState(s){
+  state = s; accent = ACCENT[s];
+  document.documentElement.style.setProperty("--accent", accent);
+  elDot.style.background = accent; elDot.style.boxShadow = "0 0 12px "+accent;
+  elStateLabel.textContent = LABEL[s];
+}
+setState(State.Idle);
+
+// ---------- Conversazione + Ollama streaming ----------
+const history = [{ role:"system", content: SYSTEM_PROMPT }];
+let streaming = false;
+
+function showResponse(text, isPlaceholder=false){
+  elResp.classList.toggle("placeholder", isPlaceholder);
+  // markdown leggero per il display (grassetto **..**), il resto come testo
+  if(isPlaceholder){ elResp.textContent = text; return; }
+  elResp.innerHTML = text
+    .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
+    .replace(/\*\*([^*]+)\*\*/g,"<b>$1</b>");
+  elResp.scrollTop = elResp.scrollHeight;
+}
+
+// ---- Strumenti esposti al modello (stessi del desktop, adattati al browser) ----
+const TOOLS = [
+  { type:"function", function:{
+      name:"web_search",
+      description:"Cerca informazioni sul web (DuckDuckGo). Usalo per fatti, notizie o informazioni non presenti localmente.",
+      parameters:{ type:"object", properties:{ query:{ type:"string", description:"I termini da cercare" } }, required:["query"] }
+  }},
+  { type:"function", function:{
+      name:"scan_folder",
+      description:"Elenca file e sottocartelle di una cartella locale (l'utente la sceglie). Usalo quando l'utente chiede cosa c'è in una cartella.",
+      parameters:{ type:"object", properties:{ path:{ type:"string", description:"Cartella indicativa (l'utente la selezionerà)" } }, required:["path"] }
+  }},
+  { type:"function", function:{
+      name:"read_file",
+      description:"Legge il contenuto testuale di un file locale (l'utente lo sceglie). Usalo quando l'utente chiede di leggere/aprire un file.",
+      parameters:{ type:"object", properties:{ path:{ type:"string", description:"File indicativo (l'utente lo selezionerà)" } }, required:["path"] }
+  }},
+  { type:"function", function:{
+      name:"create_file",
+      description:"Crea un file di testo locale con il contenuto indicato. L'utente conferma scegliendo dove salvarlo. Usalo per creare/salvare un file.",
+      parameters:{ type:"object", properties:{ path:{ type:"string", description:"Nome file suggerito" }, content:{ type:"string", description:"Contenuto da scrivere" } }, required:["path","content"] }
+  }},
+  { type:"function", function:{
+      name:"callsign",
+      description:"Cerca info su un nominativo radioamatoriale (tipo QRZ): paese/DXCC dal prefisso per qualsiasi call, e dettagli (nome, QTH, locatore) per i nominativi USA via callook. Usalo quando l'utente chiede di chi è un nominativo o da dove trasmette.",
+      parameters:{ type:"object", properties:{ call:{ type:"string", description:"il nominativo, es. IU8LMC, W1AW, DL1ABC" } }, required:["call"] }
+  }}
+];
+const MAX_TOOL_ROUNDS = 5;
+let toolRounds = 0;
+
+function fmtSize(b){
+  if(b < 1024) return b+" B";
+  if(b < 1048576) return (b/1024).toFixed(1)+" KB";
+  return (b/1048576).toFixed(1)+" MB";
+}
+
+// Esegue un singolo round di streaming; ritorna {content, toolCalls}.
+async function streamOnce(host, model){
+  const resp = await fetch(host + "/api/chat", {
+    method:"POST", headers:{ "Content-Type":"application/json" },
+    body: JSON.stringify({
+      model, messages:history, tools:TOOLS, stream:true,
+      options:{ temperature:1.0, top_p:0.95, top_k:64, num_ctx:8192 }
+    })
+  });
+  if(!resp.ok){ throw new Error("HTTP "+resp.status+" "+resp.statusText); }
+  const reader = resp.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "", content = "", toolCalls = [];
+  for(;;){
+    const { value, done } = await reader.read();
+    if(done) break;
+    buf += dec.decode(value, { stream:true });
+    let nl;
+    while((nl = buf.indexOf("\n")) >= 0){
+      const line = buf.slice(0, nl).trim(); buf = buf.slice(nl+1);
+      if(!line) continue;
+      let obj; try{ obj = JSON.parse(line); }catch(e){ continue; }
+      if(obj.error){ throw new Error(obj.error); }
+      const msg = obj.message || {};
+      for(const c of (msg.tool_calls || [])) toolCalls.push(c);
+      const chunk = msg.content || "";
+      if(chunk){
+        content += chunk;
+        showResponse(content);
+        if(state !== State.Speaking) setState(State.Speaking);
+        ttsFeed(chunk);
+      }
+    }
+  }
+  return { content, toolCalls };
+}
+
+async function ask(userText){
+  const host = $("host").value.trim().replace(/\/$/,"");
+  const model = $("model").value.trim();
+  history.push({ role:"user", content:userText });
+
+  setState(State.Thinking);
+  showResponse("");
+  streaming = true;
+  toolRounds = 0;
+  ttsReset();
+
+  try{
+    for(;;){
+      const r = await streamOnce(host, model);
+      if(r.toolCalls.length && toolRounds < MAX_TOOL_ROUNDS){
+        history.push({ role:"assistant", content:r.content, tool_calls:r.toolCalls });
+        for(const call of r.toolCalls){
+          const result = await executeTool(call);
+          history.push({ role:"tool", tool_name:(call.function && call.function.name) || "", content:result });
+        }
+        toolRounds++;
+        continue;   // nuovo round: il modello userà i risultati
+      }
+      history.push({ role:"assistant", content:r.content.trim() });
+      streaming = false;
+      ttsFlush();
+      break;
+    }
+  }catch(err){
+    streaming = false;
+    if(history.length && history[history.length-1].role === "user") history.pop();
+    ttsStopAll();
+    elResp.classList.remove("placeholder");
+    elResp.innerHTML = '<span class="err">Errore Ollama: '+err.message+
+      '. Verifica che Ollama sia attivo e avviato con <b>OLLAMA_ORIGINS=*</b> '+
+      '(necessario per le richieste dal browser).</span>';
+    setState(State.Idle);
+  }
+}
+
+// ---- Esecuzione strumenti ----
+async function executeTool(call){
+  const fn = call.function || {};
+  const name = fn.name;
+  let args = fn.arguments || {};
+  if(typeof args === "string"){ try{ args = JSON.parse(args); }catch(e){ args = {}; } }
+  try{
+    switch(name){
+      case "web_search":  return await webSearchTool(args.query || "");
+      case "scan_folder": return await scanFolderTool();
+      case "read_file":   return await readFileTool();
+      case "create_file": return await createFileTool(args.path || "", args.content || "");
+      case "callsign":    return await callsignTool(args.call || "");
+      default: return 'Errore: strumento sconosciuto "'+name+'".';
+    }
+  }catch(e){ return "Errore nell'esecuzione di "+name+": "+(e.message || e); }
+}
+
+// Lookup nominativi: prefisso->paese (offline) + dettagli USA via callook.
+const PREFIXES = {
+  "IS0":"Italia (Sardegna)","IM0":"Italia (Sardegna)","I":"Italia",
+  "K":"Stati Uniti","W":"Stati Uniti","N":"Stati Uniti",
+  "AA":"Stati Uniti","AB":"Stati Uniti","AC":"Stati Uniti","AD":"Stati Uniti","AE":"Stati Uniti",
+  "AF":"Stati Uniti","AG":"Stati Uniti","AI":"Stati Uniti","AJ":"Stati Uniti","AK":"Stati Uniti","AL":"Stati Uniti",
+  "KH6":"Stati Uniti (Hawaii)","KL":"Stati Uniti (Alaska)","KP4":"Porto Rico",
+  "VE":"Canada","VA":"Canada","VO":"Canada","VY":"Canada","VK":"Australia",
+  "G":"Regno Unito","M":"Regno Unito","2E":"Regno Unito","GW":"Galles","MW":"Galles","GM":"Scozia","MM":"Scozia",
+  "GI":"Irlanda del Nord","GD":"Isola di Man","GU":"Guernsey","GJ":"Jersey",
+  "DA":"Germania","DB":"Germania","DC":"Germania","DD":"Germania","DF":"Germania","DG":"Germania","DH":"Germania",
+  "DJ":"Germania","DK":"Germania","DL":"Germania","DM":"Germania","DO":"Germania","DP":"Germania","DR":"Germania",
+  "F":"Francia","TK":"Corsica",
+  "EA":"Spagna","EB":"Spagna","EC":"Spagna","ED":"Spagna","EE":"Spagna",
+  "EA6":"Spagna (Baleari)","EA8":"Spagna (Canarie)","EA9":"Ceuta e Melilla",
+  "CT":"Portogallo","CT3":"Madeira","CU":"Azzorre",
+  "ON":"Belgio","OT":"Belgio","PA":"Paesi Bassi","PB":"Paesi Bassi","PD":"Paesi Bassi","PE":"Paesi Bassi","PI":"Paesi Bassi",
+  "LX":"Lussemburgo","HB9":"Svizzera","HB0":"Liechtenstein","OE":"Austria","EI":"Irlanda","EJ":"Irlanda",
+  "LA":"Norvegia","LB":"Norvegia","LG":"Norvegia","SM":"Svezia","SA":"Svezia","SK":"Svezia",
+  "OH":"Finlandia","OF":"Finlandia","OH0":"Isole Åland","OZ":"Danimarca","OU":"Danimarca",
+  "OX":"Groenlandia","OY":"Isole Fær Øer","TF":"Islanda",
+  "SP":"Polonia","SQ":"Polonia","SN":"Polonia","OK":"Repubblica Ceca","OL":"Repubblica Ceca","OM":"Slovacchia",
+  "HA":"Ungheria","HG":"Ungheria","YO":"Romania","YP":"Romania","YR":"Romania","LZ":"Bulgaria","S5":"Slovenia",
+  "9A":"Croazia","E7":"Bosnia ed Erzegovina","YU":"Serbia","YT":"Serbia","4O":"Montenegro","Z3":"Macedonia del Nord","ZA":"Albania",
+  "SV":"Grecia","SW":"Grecia","SY":"Grecia","SV9":"Creta","SV5":"Dodecaneso","5B":"Cipro",
+  "YL":"Lettonia","LY":"Lituania","ES":"Estonia",
+  "UR":"Ucraina","US":"Ucraina","UT":"Ucraina","UU":"Ucraina","UX":"Ucraina","EU":"Bielorussia","EW":"Bielorussia","ER":"Moldavia",
+  "R":"Russia","UA":"Russia","UB":"Russia","UC":"Russia","UD":"Russia","RA":"Russia","RK":"Russia","RN":"Russia","RU":"Russia","RV":"Russia",
+  "EK":"Armenia","4J":"Azerbaigian","4K":"Azerbaigian","4L":"Georgia","UN":"Kazakistan","EX":"Kirghizistan","EY":"Tagikistan","EZ":"Turkmenistan","UK":"Uzbekistan",
+  "TA":"Turchia","TC":"Turchia","4X":"Israele","4Z":"Israele","JY":"Giordania","YK":"Siria","OD":"Libano","YI":"Iraq","EP":"Iran",
+  "A4":"Oman","A6":"Emirati Arabi Uniti","A7":"Qatar","A9":"Bahrein","HZ":"Arabia Saudita","9K":"Kuwait","YA":"Afghanistan",
+  "AP":"Pakistan","VU":"India","4S":"Sri Lanka","S2":"Bangladesh","XZ":"Myanmar","HS":"Thailandia","E2":"Thailandia",
+  "XV":"Vietnam","XU":"Cambogia","9M":"Malaysia","9V":"Singapore","YB":"Indonesia","YC":"Indonesia","DU":"Filippine","DV":"Filippine",
+  "BY":"Cina","BG":"Cina","BA":"Cina","BD":"Cina","BV":"Taiwan",
+  "JA":"Giappone","JE":"Giappone","JF":"Giappone","JG":"Giappone","JH":"Giappone","JI":"Giappone","JJ":"Giappone","JK":"Giappone","JR":"Giappone","7K":"Giappone",
+  "HL":"Corea del Sud","DS":"Corea del Sud","P5":"Corea del Nord",
+  "ZL":"Nuova Zelanda","FK":"Nuova Caledonia","FO":"Polinesia Francese","KH2":"Guam",
+  "ZS":"Sudafrica","SU":"Egitto","CN":"Marocco","7X":"Algeria","3V":"Tunisia","5A":"Libia","5N":"Nigeria","5Z":"Kenya",
+  "ET":"Etiopia","EL":"Liberia","FR":"Riunione","3B8":"Mauritius","D4":"Capo Verde","ZD7":"Sant'Elena",
+  "XE":"Messico","XF":"Messico","CO":"Cuba","CM":"Cuba","HI":"Rep. Dominicana","HH":"Haiti","TG":"Guatemala","YS":"El Salvador",
+  "HR":"Honduras","YN":"Nicaragua","TI":"Costa Rica","HP":"Panama","PY":"Brasile","PP":"Brasile","PT":"Brasile","PU":"Brasile",
+  "LU":"Argentina","CE":"Cile","CX":"Uruguay","CP":"Bolivia","OA":"Perù","HC":"Ecuador","HK":"Colombia","YV":"Venezuela",
+  "ZP":"Paraguay","PJ":"Antille Olandesi","FY":"Guyana Francese","8R":"Guyana"
+};
+function resolvePrefix(call){
+  const c = call.toUpperCase();
+  for(let len = Math.min(3, c.length); len >= 1; len--){
+    const p = c.slice(0, len);
+    if(PREFIXES[p]) return PREFIXES[p];
+  }
+  return "";
+}
+function isUsCall(call){
+  const c = call.toUpperCase();
+  if(!c) return false;
+  const f = c[0];
+  if(f==="K"||f==="N"||f==="W") return true;
+  if(f==="A" && c.length>=2 && c[1]>="A" && c[1]<="L") return true;
+  return false;
+}
+async function callsignTool(call){
+  call = (call||"").trim().toUpperCase();
+  if(!call) return "Errore: nominativo mancante.";
+  const country = resolvePrefix(call);
+  let info = country
+    ? "Nominativo "+call+": paese probabile "+country+" (dal prefisso)."
+    : "Nominativo "+call+": prefisso non riconosciuto nella tabella locale.";
+  if(isUsCall(call)){
+    try{
+      const o = await (await fetch("https://callook.info/"+encodeURIComponent(call)+"/json")).json();
+      if(o.status === "VALID"){
+        const name = o.name || "";
+        const addr = (o.address && o.address.line2) || "";
+        const grid = (o.location && o.location.gridsquare) || "";
+        const cls  = (o.current && o.current.operClass) || "";
+        info += " Dettagli (callook):";
+        if(name) info += " intestatario "+name+";";
+        if(addr) info += " QTH "+addr+";";
+        if(grid) info += " locatore "+grid+";";
+        if(cls)  info += " classe "+cls+";";
+      } else {
+        info += " callook: nominativo non trovato o non valido.";
+      }
+    }catch(e){
+      info += " (dettagli callook non disponibili dal browser: "+(e.message||e)+").";
+    }
+  } else {
+    info += " Per nome/QTH nel mondo serve HamQTH (disponibile nella versione desktop).";
+  }
+  return info;
+}
+
+async function webSearchTool(query){
+  if(!query) return "Errore: query di ricerca mancante.";
+  const u = "https://api.duckduckgo.com/?format=json&no_html=1&t=decodius&q="+encodeURIComponent(query);
+  const o = await (await fetch(u)).json();
+  let out = "";
+  if(o.Answer) out += "Risposta diretta: "+o.Answer+"\n";
+  if(o.AbstractText){ if(o.Heading) out += o.Heading+": "; out += o.AbstractText+"\n"; if(o.AbstractURL) out += "Fonte: "+o.AbstractURL+"\n"; }
+  else if(o.Definition) out += o.Definition+"\n";
+  let n=0;
+  for(const rt of (o.RelatedTopics || [])){ if(!rt.Text) continue; out += "- "+rt.Text+"\n"; if(++n>=5) break; }
+  return out.trim() ? "Risultati ricerca web:\n"+out : "Nessun risultato utile trovato per questa ricerca.";
+}
+
+async function scanFolderTool(){
+  if(!window.showDirectoryPicker) return "Errore: questo browser non consente l'accesso alle cartelle (usa Chrome o Edge).";
+  return gateAction("Scegli cartella", "Decodius vuole elencare il contenuto di una cartella locale.\nScegli quale cartella aprire.", async () => {
+    const dir = await window.showDirectoryPicker();
+    const items = [];
+    for await (const [name, handle] of dir.entries()){
+      if(items.length >= 200){ items.push("… e altri elementi non elencati"); break; }
+      if(handle.kind === "directory") items.push("[DIR]  "+name);
+      else { let s=""; try{ s=" ("+fmtSize((await handle.getFile()).size)+")"; }catch(e){} items.push("       "+name+s); }
+    }
+    items.sort();
+    return 'Contenuto di "'+dir.name+'" ('+items.length+" elementi):\n"+items.join("\n");
+  });
+}
+
+async function readFileTool(){
+  if(!window.showOpenFilePicker) return "Errore: questo browser non consente l'apertura di file (usa Chrome o Edge).";
+  return gateAction("Scegli file", "Decodius vuole leggere un file locale.\nScegli quale file aprire.", async () => {
+    const [h] = await window.showOpenFilePicker();
+    const f = await h.getFile();
+    const cap = 64*1024;
+    const text = await f.slice(0, cap).text();
+    const trunc = f.size > cap ? ", troncato ai primi 64 KB" : "";
+    return 'Contenuto di "'+f.name+'" ('+fmtSize(f.size)+trunc+"):\n"+text;
+  });
+}
+
+async function createFileTool(path, content){
+  if(!window.showSaveFilePicker) return "Errore: questo browser non consente il salvataggio di file (usa Chrome o Edge).";
+  const suggested = (path || "nota.txt").split(/[\\/]/).pop() || "nota.txt";
+  const preview = content.length > 500 ? content.slice(0,500)+"\n… (anteprima troncata)" : content;
+  return gateAction("Salva file", "Decodius vuole creare un file:\n"+(path || suggested)+"\n\nContenuto:\n"+preview, async () => {
+    const h = await window.showSaveFilePicker({ suggestedName: suggested });
+    const w = await h.createWritable();
+    await w.write(content);
+    await w.close();
+    return 'File salvato come "'+h.name+'" ('+fmtSize(content.length)+").";
+  });
+}
+
+// Mostra l'overlay con un pulsante: il click fornisce il "gesto utente" richiesto
+// dal browser per le API file, e funge anche da conferma esplicita.
+const overlay = $("overlay"), overlayDesc = $("overlayDesc"),
+      overlayBtn = $("overlayBtn"), overlayCancel = $("overlayCancel"), overlayTitle = $("overlayTitle");
+function gateAction(btnLabel, description, action){
+  return new Promise(resolve => {
+    overlayTitle.textContent = "Decodius richiede un'azione";
+    overlayDesc.textContent = description;
+    overlayBtn.textContent = btnLabel;
+    overlay.style.display = "flex";
+    const cleanup = () => { overlay.style.display = "none"; overlayBtn.onclick = null; overlayCancel.onclick = null; };
+    overlayBtn.onclick = async () => {
+      try{ const res = await action(); cleanup(); resolve(res); }
+      catch(e){ cleanup(); resolve(e && e.name === "AbortError" ? "Operazione annullata dall'utente." : ("Errore: "+(e.message || e))); }
+    };
+    overlayCancel.onclick = () => { cleanup(); resolve("Operazione annullata dall'utente."); };
+  });
+}
+
+function send(){
+  const t = elInput.value.trim();
+  if(!t) return;
+  elInput.value = "";
+  ask(t);
+}
+$("send").onclick = send;
+elInput.addEventListener("keydown", e => { if(e.key === "Enter") send(); });
+
+// ---------- TTS (Web Speech API) frase-per-frase ----------
+const synth = window.speechSynthesis;
+let itVoice = null;
+function pickVoice(){
+  const vs = synth ? synth.getVoices() : [];
+  itVoice = vs.find(v => /^it(-|_)/i.test(v.lang)) || vs.find(v => /ital/i.test(v.name)) || null;
+}
+if(synth){ pickVoice(); synth.onvoiceschanged = pickVoice; }
+
+let ttsPending = "";   // testo non ancora segmentato
+let ttsChunk = "";     // accumulo per la soglia minima
+const ttsQueue = [];   // blocchi pronti
+let ttsSpeaking = false;
+const MIN_TTS = 30;
+
+function cleanForSpeech(s){
+  return s
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")        // link -> testo
+    .replace(/^\s*([-*+]|\d+\.)\s+/gm, "")          // marcatori lista
+    .replace(/^\s*#+\s*/gm, "")                     // heading
+    .replace(/^\s*>\s*/gm, "")                      // citazioni
+    .replace(/[*`#]/g, "")                          // enfasi/codice
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
+
+function ttsReset(){ ttsStopAll(); }
+function ttsStopAll(){
+  ttsPending = ""; ttsChunk = ""; ttsQueue.length = 0; ttsSpeaking = false;
+  if(synth) synth.cancel();
+}
+
+function enqueueSentences(flush){
+  const enders = ".!?…\n";
+  let start = 0;
+  for(let i=0;i<ttsPending.length;i++){
+    const c = ttsPending[i];
+    if(enders.indexOf(c) < 0) continue;
+    const newline = c === "\n";
+    const spaceAfter = i+1 < ttsPending.length && /\s/.test(ttsPending[i+1]);
+    if(!newline && !spaceAfter) continue;
+    const sentence = cleanForSpeech(ttsPending.slice(start, i+1));
+    start = i+1;
+    if(!sentence) continue;
+    ttsChunk = ttsChunk ? ttsChunk + " " + sentence : sentence;
+    if(ttsChunk.length >= MIN_TTS){ ttsQueue.push(ttsChunk); ttsChunk = ""; }
+  }
+  ttsPending = ttsPending.slice(start);
+  if(flush){
+    const tail = cleanForSpeech(ttsPending);
+    if(tail) ttsChunk = ttsChunk ? ttsChunk + " " + tail : tail;
+    ttsPending = "";
+    if(ttsChunk){ ttsQueue.push(ttsChunk); ttsChunk = ""; }
+  }
+}
+
+function speakNext(){
+  if(!synth || ttsSpeaking) return;
+  if(ttsQueue.length){
+    const text = ttsQueue.shift();
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = "it-IT";
+    if(itVoice) u.voice = itVoice;
+    u.rate = 0.98;
+    ttsSpeaking = true;
+    u.onend = () => { ttsSpeaking = false; speakNext(); };
+    u.onerror = () => { ttsSpeaking = false; speakNext(); };
+    synth.speak(u);
+    return;
+  }
+  if(!streaming && state === State.Speaking) setState(State.Idle);
+}
+
+function ttsFeed(chunk){ ttsPending += chunk; enqueueSentences(false); speakNext(); }
+function ttsFlush(){ enqueueSentences(true); speakNext(); }
+
+// ---------- Mic: riconoscimento vocale (voce → testo) ----------
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let recog = null, listening = false;
+const micBtn = $("mic");
+if(SR){
+  recog = new SR();
+  recog.lang = "it-IT"; recog.interimResults = false; recog.maxAlternatives = 1;
+  recog.onresult = e => {
+    const text = e.results[0][0].transcript;
+    elInput.value = text;
+    ask(text); elInput.value = "";
+  };
+  recog.onend = () => { listening = false; micBtn.classList.remove("on"); micBtn.textContent = "○ Mic";
+                        if(state === State.Listening) setState(State.Idle); };
+  recog.onerror = () => { listening = false; micBtn.classList.remove("on"); micBtn.textContent = "○ Mic"; };
+  micBtn.onclick = () => {
+    if(listening){ recog.stop(); return; }
+    listening = true; micBtn.classList.add("on"); micBtn.textContent = "● Mic";
+    setState(State.Listening); recog.start();
+  };
+}else{
+  micBtn.title = "Riconoscimento vocale non supportato da questo browser";
+  micBtn.style.opacity = .5;
+  micBtn.onclick = () => alert("Questo browser non supporta il riconoscimento vocale (usa Chrome/Edge).");
+}
+
+// ============================================================
+//  VISUALIZZATORE JARVIS (canvas + Web Audio)
+// ============================================================
+const cv = $("cv"), ctx = cv.getContext("2d");
+const NUM_BANDS = 56;
+let levels = new Array(NUM_BANDS).fill(0);   // smussati
+let rms = 0;
+let analyser = null, freqData = null, timeData = null, sampleRate = 48000;
+
+function resize(){
+  const r = window.devicePixelRatio || 1;
+  cv.width = cv.clientWidth * r; cv.height = cv.clientHeight * r;
+  ctx.setTransform(r,0,0,r,0,0);
+}
+window.addEventListener("resize", resize); resize();
+
+async function initAudio(){
+  try{
+    const stream = await navigator.mediaDevices.getUserMedia({ audio:true });
+    const ac = new (window.AudioContext || window.webkitAudioContext)();
+    sampleRate = ac.sampleRate;
+    const src = ac.createMediaStreamSource(stream);
+    analyser = ac.createAnalyser();
+    analyser.fftSize = 2048;
+    analyser.smoothingTimeConstant = 0.75;
+    src.connect(analyser);
+    freqData = new Uint8Array(analyser.frequencyBinCount);
+    timeData = new Uint8Array(analyser.fftSize);
+  }catch(e){
+    // niente microfono: il visualizzatore resta "a riposo" ma l'app funziona lo stesso
+    console.warn("Microfono non disponibile:", e.message);
+  }
+}
+initAudio();
+
+// Mappa lo spettro FFT in NUM_BANDS bande log-spaziate (80 Hz .. Nyquist)
+function computeBands(){
+  if(!analyser){ return; }
+  analyser.getByteFrequencyData(freqData);
+  analyser.getByteTimeDomainData(timeData);
+  const half = freqData.length;
+  const binHz = sampleRate / analyser.fftSize;
+  const fMin = 80, fMax = sampleRate/2;
+  for(let b=0;b<NUM_BANDS;b++){
+    const lo = fMin * Math.pow(fMax/fMin, b/NUM_BANDS);
+    const hi = fMin * Math.pow(fMax/fMin, (b+1)/NUM_BANDS);
+    let i0 = Math.max(1, Math.floor(lo/binHz));
+    let i1 = Math.min(half-1, Math.floor(hi/binHz));
+    if(i1 < i0) i1 = i0;
+    let peak = 0;
+    for(let i=i0;i<=i1;i++) if(freqData[i] > peak) peak = freqData[i];
+    const norm = Math.pow(peak/255, 1.2);          // un po' di contrasto
+    levels[b] += (norm - levels[b]) * 0.35;        // smoothing temporale
+  }
+  // RMS dal dominio del tempo
+  let acc = 0;
+  for(let i=0;i<timeData.length;i++){ const v=(timeData[i]-128)/128; acc += v*v; }
+  const r = Math.sqrt(acc/timeData.length);
+  rms += (r - rms) * 0.3;
+}
+
+let t0 = performance.now();
+function draw(now){
+  computeBands();
+  const W = cv.clientWidth, H = cv.clientHeight;
+  const cx = W/2, cy = H/2;
+  const [ar,ag,ab] = hexToRgb(accent);
+  const A = (a)=>`rgba(${ar},${ag},${ab},${a})`;
+  ctx.clearRect(0,0,W,H);
+
+  const base = Math.min(W,H);
+  const innerR = base * 0.16;
+  const maxBar = base * 0.13;
+  const t = (now - t0)/1000;
+
+  // anelli decorativi rotanti
+  for(let k=0;k<2;k++){
+    const rr = innerR + 38 + k*30;
+    ctx.save(); ctx.translate(cx,cy); ctx.rotate((k%2? t*0.24 : -t*0.18));
+    ctx.strokeStyle = A(0.12 - k*0.04); ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(0,0, rr, 0, Math.PI*2); ctx.stroke();
+    // tacche
+    ctx.fillStyle = A(0.18);
+    for(let m=0;m<60;m++){
+      const ang = m*Math.PI/30;
+      const x = Math.cos(ang)*rr, y = Math.sin(ang)*rr;
+      ctx.save(); ctx.translate(x,y); ctx.rotate(ang); ctx.fillRect(-1,-3,2,6); ctx.restore();
+    }
+    ctx.restore();
+  }
+
+  // barre spettrali radiali
+  for(let i=0;i<NUM_BANDS;i++){
+    const ang = (i/NUM_BANDS) * Math.PI*2 - Math.PI/2;
+    const lvl = levels[i];
+    const len = 5 + lvl*maxBar;
+    const x0 = cx + Math.cos(ang)*innerR, y0 = cy + Math.sin(ang)*innerR;
+    const x1 = cx + Math.cos(ang)*(innerR+len), y1 = cy + Math.sin(ang)*(innerR+len);
+    ctx.strokeStyle = A(0.35 + lvl*0.65); ctx.lineWidth = 3.2; ctx.lineCap = "round";
+    ctx.beginPath(); ctx.moveTo(x0,y0); ctx.lineTo(x1,y1); ctx.stroke();
+  }
+
+  // nucleo pulsante (aloni su RMS)
+  for(let k=2;k>=0;k--){
+    const rr = innerR*0.55 * (1 + rms*(1.4 + k*0.6)) + k*10;
+    ctx.fillStyle = A(0.16 - k*0.045);
+    ctx.beginPath(); ctx.arc(cx,cy, rr, 0, Math.PI*2); ctx.fill();
+  }
+  const core = innerR*0.42 * (1 + rms*0.9);
+  ctx.fillStyle = A(0.92);
+  ctx.beginPath(); ctx.arc(cx,cy, core, 0, Math.PI*2); ctx.fill();
+
+  // testo centrale
+  ctx.fillStyle = "#04121a"; ctx.textAlign="center"; ctx.textBaseline="middle";
+  ctx.font = "700 "+Math.round(base*0.022)+"px Segoe UI";
+  ctx.fillText("DECODIUS", cx, cy - base*0.012);
+  ctx.font = "600 "+Math.round(base*0.014)+"px Segoe UI";
+  ctx.fillText(LABEL[state], cx, cy + base*0.016);
+
+  requestAnimationFrame(draw);
+}
+requestAnimationFrame(draw);
+</script>
+</body>
+</html>

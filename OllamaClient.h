@@ -1,0 +1,89 @@
+// OllamaClient.h — dialogo con il modello locale (gemma4:latest) tramite l'API di Ollama.
+#pragma once
+#include <QObject>
+#include <QNetworkAccessManager>
+#include <QJsonArray>
+#include <QString>
+#include <QByteArray>
+#include <QTimer>
+#include <functional>
+
+class QNetworkReply;
+
+class OllamaClient : public QObject {
+    Q_OBJECT
+public:
+    explicit OllamaClient(QObject* parent = nullptr);
+
+    void setModel(const QString& m) { m_model = m; }
+    void setTimeout(int ms) { m_timeoutMs = ms; }
+    void setSystemPrompt(const QString& s);
+    // Immagine (base64) da allegare al PROSSIMO messaggio utente (vision).
+    void setPendingImage(const QString& b64) { m_pendingImage = b64; }
+    void reset();
+
+public slots:
+    void ask(const QString& userText);
+    // Risposta dell'utente alla richiesta di conferma (es. creazione file).
+    void resolveConfirmation(bool accepted);
+    void cancel();   // interruzione utente (barge-in): abortisce in modo silenzioso
+
+signals:
+    void tokenReceived(const QString& chunk);   // pezzo di testo appena generato
+    void responseReady(const QString& text);    // risposta completa (a fine stream)
+    void errorOccurred(const QString& message);
+    // Uno strumento "in scrittura" chiede conferma prima di agire.
+    void confirmationRequested(const QString& title, const QString& detail);
+
+private:
+    void warmUp();                      // precarica il modello in VRAM all'avvio
+    void warmChat();                    // pre-elabora system prompt+tool (cache prefisso)
+    void sendRequest();                 // invia m_history (con i tool) in streaming
+    void onReadyRead();                 // parsing incrementale NDJSON
+    void onFinished();                  // chiusura stream (successo o errore)
+    void abortCurrent();                // interrompe la reply in corso
+
+    // Esecuzione dei tool richiesti dal modello (sincroni e asincroni).
+    void handleToolCalls();             // registra l'assistant msg e avvia l'esecuzione
+    void processNextToolCall();         // esegue un tool per volta, poi rilancia
+    void runWebSearch(const QJsonObject& args, std::function<void(QString)> done);
+    void runPropagazione(std::function<void(QString)> done);
+    void runDecodium(std::function<void(QString)> done);   // stato live del decoder Decodium 4
+    void runDecodiumCommand(const QJsonObject& args, std::function<void(QString)> done); // comanda Decodium 4
+    void runCreateFile(const QJsonObject& args, std::function<void(QString)> done);
+    // Lookup nominativi: prefisso->paese (offline) + dettagli via callook (USA) o HamQTH.
+    void runCallsign(const QJsonObject& args, std::function<void(QString)> done);
+    void callookLookup(const QString& call, const QString& prefixInfo, std::function<void(QString)> done);
+    void hamqthLookup(const QString& call, const QString& prefixInfo, std::function<void(QString)> done);
+    void hamqthQuery(const QString& call, const QString& prefixInfo, std::function<void(QString)> done);
+
+    QNetworkAccessManager m_net;
+    QNetworkReply* m_reply = nullptr;   // richiesta di streaming attiva
+    QByteArray m_lineBuf;               // residuo di riga NDJSON tra due letture
+    QString    m_acc;                   // testo accumulato finora
+    QJsonArray m_toolCalls;             // tool_calls raccolti nello stream corrente
+    QJsonArray m_pendingCalls;          // tool_calls in esecuzione nel round corrente
+    int        m_callIndex = 0;         // indice del tool in esecuzione
+    bool       m_errored = false;       // errore già segnalato per questa richiesta
+    bool       m_userCancelled = false; // interruzione utente: niente messaggio d'errore
+    int        m_toolRounds = 0;        // round di tool calling già eseguiti
+    QTimer     m_idleTimer;             // timeout di inattività (nessun token)
+
+    // Stato in sospeso mentre attendo la conferma dell'utente (create_file).
+    bool       m_awaitingConfirm = false;
+    QString    m_confirmPath;
+    QString    m_confirmContent;
+    std::function<void(QString)> m_confirmDone;
+
+    QString m_host  = "http://localhost:11434";
+    QString m_model = "gemma4:latest";
+    int     m_timeoutMs = 120000;   // 2 min senza alcun token -> abort
+    QJsonArray m_history;
+    QJsonArray m_tools;             // strumenti esposti al modello (es. scan_folder)
+    QString    m_pendingImage;      // base64 immagine per il prossimo messaggio (vision)
+
+    // HamQTH (lookup mondiale): credenziali da file appDir/decodius_hamqth.txt
+    // (riga1 user, riga2 password); sessione riusata finché valida.
+    QString    m_hamqthSession;     // session_id corrente
+    qint64     m_hamqthSessionMs = 0; // epoch ms dell'ultimo login (scade ~1h)
+};
