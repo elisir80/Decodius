@@ -48,3 +48,5 @@ Thumbs.db
 # --- Config locali con dati personali (NON pubblicare) ---
 decodius_hamqth.txt
 call.txt
+decodius_provider.txt
+decodius_memoria.txt

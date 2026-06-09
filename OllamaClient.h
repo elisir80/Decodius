@@ -40,6 +40,7 @@ private:
     void warmChat();                    // pre-elabora system prompt+tool (cache prefisso)
     void sendRequest();                 // invia m_history (con i tool) in streaming
     void onReadyRead();                 // parsing incrementale NDJSON
+    void onReadyReadOpenAI();           // parsing incrementale SSE (provider OpenAI-compat)
     void onFinished();                  // chiusura stream (successo o errore)
     void abortCurrent();                // interrompe la reply in corso
 
@@ -78,6 +79,9 @@ private:
 
     QString m_host  = "http://localhost:11434";
     QString m_model = "gemma4:latest";
+    // Backend OpenAI-compatibile (NVIDIA NIM/OpenRouter/DeepSeek/Gemini) invece di Ollama.
+    bool    m_openai = false;        // true = usa /chat/completions con Bearer + SSE
+    QString m_apiKey;               // chiave del provider (Authorization: Bearer)
     int     m_timeoutMs = 120000;   // 2 min senza alcun token -> abort
     QJsonArray m_history;
     QJsonArray m_tools;             // strumenti esposti al modello (es. scan_folder)

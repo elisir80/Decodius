@@ -467,7 +467,39 @@ OllamaClient::OllamaClient(QObject* parent) : QObject(parent) {
         mf.close();
     }
 
-    warmUp();   // precarica il modello in VRAM all'avvio (prima risposta veloce)
+    // Cervello alternativo via provider OpenAI-compatibile (es. NVIDIA NIM, OpenRouter,
+    // DeepSeek, Gemini). File decodius_provider.txt con righe key=value:
+    //   base_url=https://integrate.api.nvidia.com/v1
+    //   api_key=nvapi-...
+    //   model=nvidia/llama-3.3-nemotron-super-49b-v1
+    // Se base_url e api_key sono presenti, Decodius usa quel provider invece di Ollama.
+    QFile pf(QCoreApplication::applicationDirPath() + QStringLiteral("/decodius_provider.txt"));
+    if (pf.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        QString base, key, mdl;
+        const QStringList lines = QString::fromUtf8(pf.readAll()).split('\n');
+        for (const QString& raw : lines) {
+            const QString l = raw.trimmed();
+            if (l.isEmpty() || l.startsWith('#')) continue;
+            const int eq = l.indexOf('=');
+            if (eq < 0) continue;
+            const QString k = l.left(eq).trimmed().toLower();
+            const QString v = l.mid(eq + 1).trimmed();
+            if (k == QLatin1String("base_url")) base = v;
+            else if (k == QLatin1String("api_key")) key = v;
+            else if (k == QLatin1String("model")) mdl = v;
+        }
+        pf.close();
+        if (!base.isEmpty() && !key.isEmpty()) {
+            while (base.endsWith('/')) base.chop(1);   // niente slash finale
+            m_openai = true;
+            m_host   = base;
+            m_apiKey = key;
+            if (!mdl.isEmpty()) m_model = mdl;
+        }
+    }
+
+    if (!m_openai)
+        warmUp();   // precarica il modello in VRAM (solo Ollama locale)
 
     // Descrizione degli strumenti esposti al modello (schema JSON).
     QJsonObject scanFolder{
@@ -808,6 +840,7 @@ void OllamaClient::setSystemPrompt(const QString& s) {
 // Ollama elabora e mette in CACHE il prefisso (costoso sui modelli grandi su CPU).
 // La prima domanda reale riusa la cache invece di pagare ~30s di prompt eval.
 void OllamaClient::warmChat() {
+    if (m_openai) return;   // provider cloud: nessun pre-riscaldamento (consumerebbe quota)
     if (m_history.isEmpty()) return;
     QJsonArray msgs = m_history;                      // [system]
     msgs.append(QJsonObject{{"role", "user"}, {"content", "ok"}});
@@ -875,19 +908,37 @@ void OllamaClient::sendRequest() {
         // nessun offload, generazione testo veloce.
         {"temperature", 0.7}, {"top_p", 0.9}, {"top_k", 40}, {"num_ctx", 8192}
     };
-    QJsonObject body{
-        {"model", m_model},
-        {"messages", m_history},
-        {"tools", m_tools},
-        {"stream", true},
-        {"think", false},          // gemma4 è un modello "thinking": disattivo il
-                                   // ragionamento nascosto -> risposte ~3-4x più veloci
-        {"keep_alive", -1},        // tieni il modello residente in VRAM (no ricariche)
-        {"options", opts}
-    };
-
-    QNetworkRequest req{QUrl(m_host + "/api/chat")};
-    req.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+    QNetworkRequest req;
+    QJsonObject body;
+    if (m_openai) {
+        // Provider OpenAI-compatibile (NVIDIA NIM, ecc.): /chat/completions + Bearer + SSE.
+        body = QJsonObject{
+            {"model", m_model},
+            {"messages", m_history},
+            {"tools", m_tools},
+            {"stream", true},
+            {"temperature", 0.7},
+            {"top_p", 0.9},
+            {"max_tokens", 1024}
+        };
+        req = QNetworkRequest{QUrl(m_host + QStringLiteral("/chat/completions"))};
+        req.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+        req.setRawHeader("Authorization", QByteArray("Bearer ") + m_apiKey.toUtf8());
+        req.setRawHeader("Accept", "text/event-stream");
+    } else {
+        body = QJsonObject{
+            {"model", m_model},
+            {"messages", m_history},
+            {"tools", m_tools},
+            {"stream", true},
+            {"think", false},          // gemma4 è un modello "thinking": disattivo il
+                                       // ragionamento nascosto -> risposte ~3-4x più veloci
+            {"keep_alive", -1},        // tieni il modello residente in VRAM (no ricariche)
+            {"options", opts}
+        };
+        req = QNetworkRequest{QUrl(m_host + "/api/chat")};
+        req.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+    }
 
     m_lineBuf.clear();
     m_acc.clear();
@@ -906,6 +957,8 @@ void OllamaClient::onReadyRead() {
     if (!m_reply) return;
     m_idleTimer.start(m_timeoutMs);     // riarma: stiamo ancora ricevendo dati
     m_lineBuf.append(m_reply->readAll());
+
+    if (m_openai) { onReadyReadOpenAI(); return; }
 
     int nl;
     while ((nl = m_lineBuf.indexOf('\n')) >= 0) {
@@ -932,6 +985,61 @@ void OllamaClient::onReadyRead() {
         if (!chunk.isEmpty()) {
             m_acc += chunk;
             emit tokenReceived(chunk);
+        }
+    }
+}
+
+// Parsing dello streaming SSE di un provider OpenAI-compatibile (NVIDIA NIM, ecc.).
+// Righe "data: {json}"; "[DONE]" termina. delta.content = token; delta.tool_calls
+// arrivano a pezzi e vanno accumulati per "index".
+void OllamaClient::onReadyReadOpenAI() {
+    int nl;
+    while ((nl = m_lineBuf.indexOf('\n')) >= 0) {
+        const QByteArray line = m_lineBuf.left(nl).trimmed();
+        m_lineBuf.remove(0, nl + 1);
+        if (line.isEmpty()) continue;
+
+        QByteArray payload = line;
+        if (line.startsWith("data:")) payload = line.mid(5).trimmed();
+        if (payload == "[DONE]") continue;
+        if (!payload.startsWith('{')) continue;   // commenti/keep-alive SSE
+
+        const QJsonObject obj = QJsonDocument::fromJson(payload).object();
+        if (obj.contains("error")) {
+            const QJsonValue ev = obj.value("error");
+            const QString err = ev.isObject() ? ev.toObject().value("message").toString()
+                                              : ev.toString();
+            m_errored = true;
+            emit errorOccurred(err.isEmpty() ? QStringLiteral("errore dal provider") : err);
+            abortCurrent();
+            return;
+        }
+        const QJsonArray choices = obj.value("choices").toArray();
+        if (choices.isEmpty()) continue;
+        const QJsonObject delta = choices.at(0).toObject().value("delta").toObject();
+
+        const QString chunk = delta.value("content").toString();
+        if (!chunk.isEmpty()) { m_acc += chunk; emit tokenReceived(chunk); }
+
+        // Accumulo dei tool_calls per indice (id+name nel primo pezzo, arguments a pezzi).
+        const QJsonArray tcs = delta.value("tool_calls").toArray();
+        for (const QJsonValue& tcv : tcs) {
+            const QJsonObject tc = tcv.toObject();
+            const int idx = tc.value("index").toInt();
+            while (m_toolCalls.size() <= idx)
+                m_toolCalls.append(QJsonObject{{"type", "function"},
+                    {"function", QJsonObject{{"name", ""}, {"arguments", ""}}}});
+            QJsonObject e = m_toolCalls.at(idx).toObject();
+            if (tc.contains("id")) e["id"] = tc.value("id").toString();
+            e["type"] = "function";
+            QJsonObject fn = e.value("function").toObject();
+            const QJsonObject tfn = tc.value("function").toObject();
+            const QString nm = tfn.value("name").toString();
+            if (!nm.isEmpty()) fn["name"] = nm;
+            if (tfn.contains("arguments"))
+                fn["arguments"] = fn.value("arguments").toString() + tfn.value("arguments").toString();
+            e["function"] = fn;
+            m_toolCalls[idx] = e;
         }
     }
 }
@@ -993,18 +1101,22 @@ void OllamaClient::processNextToolCall() {
         return;
     }
 
-    const QJsonObject fn = m_pendingCalls.at(m_callIndex).toObject().value("function").toObject();
+    const QJsonObject callObj = m_pendingCalls.at(m_callIndex).toObject();
+    const QString callId = callObj.value("id").toString();   // presente solo in modalità OpenAI
+    const QJsonObject fn = callObj.value("function").toObject();
     const QString name = fn.value("name").toString();
     const QJsonValue av = fn.value("arguments");
     const QJsonObject args = av.isObject()
         ? av.toObject()
         : QJsonDocument::fromJson(av.toString().toUtf8()).object();
 
-    // Continuazione comune: accoda il risultato e passa al tool successivo.
-    auto done = [this, name](const QString& result) {
-        m_history.append(QJsonObject{
-            {"role", "tool"}, {"tool_name", name}, {"content", result}
-        });
+    // Continuazione comune: accoda il risultato e passa al tool successivo. Il messaggio
+    // tool usa tool_call_id (OpenAI) oppure tool_name (Ollama) a seconda del backend.
+    auto done = [this, name, callId](const QString& result) {
+        QJsonObject toolMsg{{"role", "tool"}, {"content", result}};
+        if (m_openai) toolMsg["tool_call_id"] = callId;
+        else          toolMsg["tool_name"] = name;
+        m_history.append(toolMsg);
         ++m_callIndex;
         processNextToolCall();
     };
