@@ -97,6 +97,6 @@ Python portatile per la voce e tutte le risorse. Compila con:
 
 ## Licenza
 
-Progetto personale di IU8LMC. Vedi i termini nel repository.
+Distribuito sotto licenza **MIT** — vedi il file [`LICENSE`](LICENSE).
 
 *73! — IU8LMC*
