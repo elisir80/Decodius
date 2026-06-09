@@ -6,6 +6,8 @@ il mondo ham e si integra in tempo reale con il decoder **DECODIUM 4**.
 
 Autore: **Martino — IU8LMC**
 
+![Decodius](docs/screenshot.png)
+
 ---
 
 ## Cosa fa
