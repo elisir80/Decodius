@@ -35,8 +35,16 @@ Assistant::Assistant(QObject* parent) : QObject(parent) {
     }
     applySystemPrompt();   // invia il prompt a Ollama (col nominativo se presente)
 
+    // Pilota automatico: timer dei tick periodici (parte solo quando attivato).
+    m_autoTimer.setInterval(20000);   // un ciclo ogni 20 s
+    m_autoTimer.setSingleShot(false);
+    connect(&m_autoTimer, &QTimer::timeout, this, &Assistant::onAutoTick);
+
     // Streaming: ogni token appena generato viene appeso e mostrato subito.
     connect(&m_ollama, &OllamaClient::tokenReceived, this, [this](const QString& chunk) {
+        // Durante un tick del pilota automatico non mostro/pronuncio nulla in streaming:
+        // decido a fine risposta (potrebbe essere "SILENZIO" da sopprimere).
+        if (m_inAutoTick) return;
         m_lastResponse += chunk;
         emit lastResponseChanged();
         if (m_state != Speaking) setState(Speaking);   // "RISPONDO" mentre scrive
@@ -48,6 +56,27 @@ Assistant::Assistant(QObject* parent) : QObject(parent) {
     });
 
     connect(&m_ollama, &OllamaClient::responseReady, this, [this](const QString& text) {
+        // Tick del pilota automatico: l'LLM ha già agito via tool. Ora il commento:
+        // se è "SILENZIO" non c'è nulla di rilevante -> non parlo e non sporco la chat.
+        if (m_inAutoTick) {
+            m_inAutoTick = false;
+            m_streaming = false;
+            const QString t = text.trimmed();
+            const QString up = QString(t).remove(QRegularExpression(QStringLiteral("[\\s.!…]+$"))).toUpper();
+            if (!t.isEmpty() && up != QStringLiteral("SILENZIO")) {
+                m_lastResponse = t;
+                emit lastResponseChanged();
+#ifdef HAVE_TTS
+                enqueueSentences(true);
+                speakNext();
+#else
+                endTurn();
+#endif
+            } else {
+                if (m_state != Idle) setState(Idle);   // niente da dire: resta in attesa
+            }
+            return;
+        }
         m_lastResponse = text;   // versione finale ripulita (trim)
         emit lastResponseChanged();
 #ifdef HAVE_TTS
@@ -70,6 +99,7 @@ Assistant::Assistant(QObject* parent) : QObject(parent) {
     });
 
     connect(&m_ollama, &OllamaClient::errorOccurred, this, [this](const QString& msg) {
+        if (m_inAutoTick) { m_inAutoTick = false; m_streaming = false; setState(Idle); return; }
         m_lastResponse = "Errore di connessione a Ollama: " + msg;
         emit lastResponseChanged();
 #ifdef HAVE_TTS
@@ -279,6 +309,23 @@ void Assistant::sendText(const QString& text) {
     QString t = text.trimmed();
     const bool hasImg = !m_pendingImageB64.isEmpty();
     if (t.isEmpty() && !hasImg) return;
+
+    // Comando diretto: attiva/ferma il pilota automatico (modalità autonoma).
+    const QString low = t.toLower();
+    if (low.contains(QStringLiteral("pilota automatico")) || low.contains(QStringLiteral("autopilota"))
+        || low.contains(QStringLiteral("modalita autonoma")) || low.contains(QStringLiteral("modalità autonoma"))) {
+        const bool off = low.contains(QStringLiteral("ferma")) || low.contains(QStringLiteral("disattiva"))
+                       || low.contains(QStringLiteral("spegni")) || low.contains(QStringLiteral("stop"))
+                       || low.contains(QStringLiteral("basta")) || low.contains(QStringLiteral("disabilita"));
+        setAutoPilot(!off);
+        return;
+    }
+    // "ferma tutto" / "stop" mentre il pilota è attivo: lo spegne subito.
+    if (m_autoPilot && (low == QStringLiteral("stop") || low == QStringLiteral("ferma")
+        || low == QStringLiteral("ferma tutto") || low == QStringLiteral("basta"))) {
+        setAutoPilot(false);
+        return;
+    }
     if (t.isEmpty()) t = QStringLiteral("Descrivi questa immagine.");  // query solo-immagine
     // Se Decodius sta già elaborando o parlando, annullo PRIMA in modo silenzioso
     // (niente errore spurio): così una nuova istruzione interrompe e prende il posto.
@@ -398,6 +445,52 @@ void Assistant::applySystemPrompt() {
                             "usala quando pertinente, ma non elencarla a meno che non te lo chieda):\n") + mem;
     }
     m_ollama.setSystemPrompt(p);
+}
+
+// Attiva/disattiva il pilota automatico (modalità autonoma). Annuncia a voce.
+void Assistant::setAutoPilot(bool on) {
+    if (m_autoPilot == on) return;
+    m_autoPilot = on;
+    emit autoPilotChanged();
+    if (on) {
+        m_autoTimer.start();
+        m_lastResponse = QStringLiteral("Pilota automatico attivato: seguo la banda e opero in autonomia. Dimmi 'ferma il pilota automatico' per fermarmi.");
+        emit lastResponseChanged();
+#ifdef HAVE_TTS
+        m_streaming = false; ttsStop(); ttsSay(m_lastResponse);
+#endif
+        QTimer::singleShot(1500, this, [this]() { onAutoTick(); });   // primo ciclo subito
+    } else {
+        m_autoTimer.stop();
+        m_inAutoTick = false;
+        m_lastResponse = QStringLiteral("Pilota automatico disattivato.");
+        emit lastResponseChanged();
+#ifdef HAVE_TTS
+        m_streaming = false; ttsStop(); ttsSay(m_lastResponse);
+#endif
+    }
+}
+
+// Un ciclo del pilota automatico: fa "ragionare e agire" l'LLM sulla banda usando i
+// suoi strumenti (decodium, dxcluster, propagazione, memoria, decodium_comando).
+void Assistant::onAutoTick() {
+    if (!m_autoPilot) return;
+    if (m_inAutoTick || m_streaming || m_state == Thinking) return;   // non sovrapporre
+    m_inAutoTick = true;
+    m_streaming  = true;
+    setState(Thinking);
+    static const QString tick = QStringLiteral(
+        "[PILOTA AUTOMATICO] Sei in modalita' autonoma sulla stazione. "
+        "1) Usa lo strumento decodium per leggere lo stato e i decode correnti. "
+        "Se sei gia' in trasmissione o in QSO, non avviare nuove chiamate. "
+        "2) Se una stazione DX interessante o un obiettivo di Martino (vedi memoria) sta "
+        "chiamando CQ e non sei occupato, chiamala subito con decodium_comando 'rispondi' "
+        "(call e grid). Puoi usare dxcluster/propagazione per valutare. "
+        "3) Quando completi o annoti un QSO usa log_qso e memorizza i fatti utili con memoria. "
+        "Poi commenta a voce in UNA frase breve SOLO le novita' rilevanti (DX chiamato, "
+        "apertura di banda, QSO fatto). Se non c'e' nulla di nuovo o rilevante, rispondi "
+        "ESATTAMENTE con la sola parola: SILENZIO");
+    m_ollama.ask(tick);
 }
 
 // Imposta il nominativo (primo avvio o cambio): salva, riapplica il prompt, notifica la UI.

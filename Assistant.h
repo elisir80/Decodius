@@ -4,6 +4,7 @@
 #include <QObject>
 #include <QtQml/qqmlregistration.h>
 #include <QString>
+#include <QTimer>
 #include "OllamaClient.h"
 #include "WhisperStt.h"
 
@@ -24,6 +25,8 @@ class Assistant : public QObject {
     // Nominativo dell'operatore (Call/QRZ): personalizzato al primo avvio.
     Q_PROPERTY(QString callSign READ callSign NOTIFY callSignChanged)
     Q_PROPERTY(bool needsCallSign READ needsCallSign NOTIFY callSignChanged)
+    // Pilota automatico: Decodius opera la stazione in autonomia (monitor proattivo).
+    Q_PROPERTY(bool autoPilot READ autoPilot NOTIFY autoPilotChanged)
 
 public:
     enum State { Idle, Listening, Thinking, Speaking };
@@ -38,6 +41,8 @@ public:
     QString callSign() const { return m_callSign; }
     bool needsCallSign() const { return m_callSign.isEmpty(); }
     Q_INVOKABLE void setCallSign(const QString& call);   // salva e applica il nominativo
+    bool autoPilot() const { return m_autoPilot; }
+    Q_INVOKABLE void setAutoPilot(bool on);   // attiva/disattiva il pilota automatico
 
     Q_INVOKABLE void sendText(const QString& text);
     Q_INVOKABLE void setListening(bool on);   // attiva/disattiva l'ascolto continuo
@@ -54,6 +59,7 @@ signals:
     void hasImageChanged();
     void alwaysListeningChanged();
     void callSignChanged();
+    void autoPilotChanged();
     // Inoltrato a QML: uno strumento chiede conferma prima di scrivere.
     void confirmationRequested(const QString& title, const QString& detail);
 
@@ -68,6 +74,13 @@ private:
     void onSpeechRecognized(const QString& text);
     bool isLikelyEcho(const QString& text) const;   // distingue l'eco di Decodius dalla voce utente
     bool m_voiceBargeIn = true;   // ascolta mentre parla per interrompere a voce
+
+    // ── Pilota automatico (Fase 3): tick periodico che fa "ragionare e agire" l'LLM
+    // sulla banda usando i suoi tool (decodium, dxcluster, memoria, comandi). ──
+    void onAutoTick();              // un ciclo del pilota automatico
+    QTimer  m_autoTimer;            // cadenza dei tick
+    bool    m_autoPilot = false;    // modalità autonoma attiva
+    bool    m_inAutoTick = false;   // true mentre è in corso un tick (sopprime l'output se "SILENZIO")
 
     OllamaClient m_ollama;
     WhisperStt*  m_whisper = nullptr;   // riconoscimento vocale locale (STT)
