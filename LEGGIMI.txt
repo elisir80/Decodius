@@ -8,16 +8,24 @@ PRIMO AVVIO
 Al primo avvio ti verrà chiesto il tuo NOMINATIVO (Call/QRZ): inseriscilo
 per personalizzare l'assistente. Potrai poi scrivergli e ti risponderà a voce.
 
-PREREQUISITO: OLLAMA (il "cervello")
-------------------------------------
-Decodius usa Ollama per il modello linguistico.
-1) Installa Ollama da:  https://ollama.com/download
-2) Scegli il modello in:  <cartella installazione>\decodius_model.txt
-   - Per un modello in CLOUD (veloce, account Ollama):  gpt-oss:120b-cloud
-     (accedi con:  ollama signin)
-   - Per un modello LOCALE (offline):  scrivi ad es.  gemma4:latest
-     e scaricalo con:  ollama pull gemma4:latest
-3) Riavvia Decodius.
+IL "CERVELLO" (OLLAMA) - CONFIGURAZIONE AUTOMATICA
+--------------------------------------------------
+Decodius usa Ollama + il modello gpt-oss:120b come "cervello".
+NON serve configurarlo a mano:
+
+  -> Al termine dell'installazione lascia spuntato
+     "Configura ora il cervello (Ollama + gpt-oss:120b)".
+
+Lo strumento automatico:
+  1) installa Ollama se manca;
+  2) avvia il servizio;
+  3) ti fa accedere con un clic (account Ollama gratuito, via browser);
+  4) prepara il modello gpt-oss:120b-cloud e configura Decodius.
+
+Puoi rilanciarlo quando vuoi da:
+  Menu Start -> Decodius -> "Configura cervello (Ollama)"
+
+Serve una connessione Internet e un account Ollama gratuito (ollama.com).
 
 VOCE
 ----

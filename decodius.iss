@@ -3,7 +3,7 @@
 ;  Compila con:  "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" decodius.iss
 ; ============================================================================
 #define MyAppName "Decodius"
-#define MyAppVersion "1.3"
+#define MyAppVersion "1.4"
 #define MyAppPublisher "IU8LMC"
 #define MyAppExe "decodius.exe"
 #define Build "C:\Users\IU8LMC\decodius\build"
@@ -48,6 +48,7 @@ Source: "{#Build}\decodius_ham_kb.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Build}\decodius_model.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Build}\LEGGIMI.txt"; DestDir: "{app}"; Flags: ignoreversion isreadme
 Source: "{#Build}\LEGGIMI-Decodium.txt"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#Build}\setup_cervello.ps1"; DestDir: "{app}"; Flags: ignoreversion
 ; --- Plugin Qt e moduli QML (cartelle di deploy di windeployqt) ---
 Source: "{#Build}\platforms\*"; DestDir: "{app}\platforms"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#Build}\imageformats\*"; DestDir: "{app}\imageformats"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -68,12 +69,14 @@ Source: "{#Build}\pyedge\*"; DestDir: "{app}\pyedge"; Flags: ignoreversion recur
 
 [Icons]
 Name: "{group}\Decodius"; Filename: "{app}\{#MyAppExe}"; IconFilename: "{app}\decodius.ico"; WorkingDir: "{app}"
+Name: "{group}\Configura cervello (Ollama)"; Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\setup_cervello.ps1"""; IconFilename: "{app}\decodius.ico"; WorkingDir: "{app}"
 Name: "{group}\Leggimi"; Filename: "{app}\LEGGIMI.txt"
 Name: "{group}\Collega Decodium"; Filename: "{app}\LEGGIMI-Decodium.txt"
 Name: "{group}\Disinstalla Decodius"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\Decodius"; Filename: "{app}\{#MyAppExe}"; IconFilename: "{app}\decodius.ico"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]
+Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\setup_cervello.ps1"""; Description: "Configura ora il cervello (Ollama + gpt-oss:120b) — consigliato"; WorkingDir: "{app}"; Flags: postinstall skipifsilent runasoriginaluser
 Filename: "{app}\{#MyAppExe}"; Description: "{cm:LaunchProgram,Decodius}"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent
 
 [UninstallDelete]
@@ -84,7 +87,10 @@ Type: filesandordirs; Name: "{userappdata}\Decodius"
 function InitializeSetup(): Boolean;
 begin
   Result := True;
-  MsgBox('Decodius richiede OLLAMA come "cervello".' + #13#10 +
-         'Se non lo hai gia, installalo da https://ollama.com dopo questa installazione.' + #13#10 +
-         'Dettagli nel file LEGGIMI.', mbInformation, MB_OK);
+  MsgBox('Decodius usa OLLAMA come "cervello".' + #13#10 + #13#10 +
+         'NON devi configurare nulla a mano: al termine dell''installazione' + #13#10 +
+         'lascia spuntata l''opzione "Configura ora il cervello".' + #13#10 +
+         'Penserà a tutto lei: installa Ollama, ti fa accedere con un clic' + #13#10 +
+         'e prepara il modello gpt-oss:120b.' + #13#10 + #13#10 +
+         'Serve una connessione Internet e un account Ollama gratuito.', mbInformation, MB_OK);
 end;
