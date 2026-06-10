@@ -13,6 +13,8 @@
 #include <QSettings>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QJsonArray>
+#include <QVariantMap>
 #include <QNetworkAccessManager>
 #include <QNetworkRequest>
 #include <QNetworkReply>
@@ -425,6 +427,41 @@ void Assistant::onHudTick() {
             m_stationOnline = online; m_stationLine1 = l1; m_stationLine2 = l2;
             emit stationChanged();
         }
+    });
+    fetchRoster();   // aggiorna anche il call roster
+}
+
+// Legge /api/decodes di Decodium e costruisce il call roster (stazioni in banda ora).
+void Assistant::fetchRoster() {
+    const QString token = QSettings(QStringLiteral("Decodium"), QStringLiteral("Decodium3"))
+                              .value(QStringLiteral("WebServerAccessToken")).toString().trimmed();
+    QUrl url(QStringLiteral("http://127.0.0.1:8080/api/decodes?token=") + token);
+    QNetworkReply* r = m_hudNet->get(QNetworkRequest(url));
+    QTimer::singleShot(2500, r, [r]() { if (r->isRunning()) r->abort(); });
+    connect(r, &QNetworkReply::finished, this, [this, r]() {
+        r->deleteLater();
+        if (r->error() != QNetworkReply::NoError) return;
+        const QJsonArray decs = QJsonDocument::fromJson(r->readAll()).object()
+                                    .value(QStringLiteral("decodes")).toArray();
+        QVariantList roster;
+        QSet<QString> seen;
+        // dai più recenti, dedup per nominativo, max 40 stazioni
+        for (int i = decs.size() - 1; i >= 0 && roster.size() < 40; --i) {
+            const QJsonObject d = decs.at(i).toObject();
+            const QString call = d.value(QStringLiteral("dxCallsign")).toString();
+            if (call.isEmpty() || d.value(QStringLiteral("isMyCall")).toBool()
+                || d.value(QStringLiteral("isTx")).toBool() || seen.contains(call)) continue;
+            seen.insert(call);
+            QVariantMap m;
+            m[QStringLiteral("call")]    = call;
+            m[QStringLiteral("db")]      = d.value(QStringLiteral("db")).toInt();
+            m[QStringLiteral("country")] = d.value(QStringLiteral("dxCountry")).toString();
+            m[QStringLiteral("freq")]    = d.value(QStringLiteral("freq")).toDouble();
+            m[QStringLiteral("isCq")]    = d.value(QStringLiteral("isCQ")).toBool();
+            roster.append(m);
+        }
+        m_callRoster = roster;
+        emit rosterChanged();
     });
 }
 

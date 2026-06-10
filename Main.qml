@@ -17,6 +17,7 @@ Window {
     property var themeColors: ["#36b6e0", "#ffb02e", "#3dffa0", "#ff6a6a"]
     property var themeNames: ["Blu", "Ambra", "Verde", "Notte"]
     property int themeIndex: 0
+    property bool rosterOpen: false
     // Stato -> colore d'accento ("umore" di Decodius); a riposo usa il tema scelto
     property color accent: {
         switch (assistant.state) {
@@ -626,6 +627,75 @@ Window {
                     fg: root.accent
                     baseColor: "#10202b"
                     onClicked: root.themeIndex = (root.themeIndex + 1) % root.themeColors.length
+                }
+                // Call Roster (pannello laterale stazioni in banda)
+                PillButton {
+                    text: "📋"
+                    fg: root.rosterOpen ? "#04121a" : root.accent
+                    baseColor: root.rosterOpen ? root.accent : "#10202b"
+                    onClicked: root.rosterOpen = !root.rosterOpen
+                }
+            }
+        }
+    }
+
+    // ───────── CALL ROSTER laterale (stazioni in banda, live da Decodium) ─────────
+    Rectangle {
+        id: rosterPanel
+        width: 250
+        anchors.top: parent.top; anchors.bottom: parent.bottom; anchors.right: parent.right
+        x: root.rosterOpen ? 0 : width            // scivola da destra
+        color: Qt.rgba(0.03, 0.08, 0.11, 0.92)
+        border.color: Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.35); border.width: 1
+        Behavior on x { NumberAnimation { duration: 260; easing.type: Easing.OutCubic } }
+        z: 50
+
+        Column {
+            anchors.fill: parent; anchors.margins: 12; spacing: 8
+            Row {
+                width: parent.width; spacing: 6
+                Text { text: "📋 CALL ROSTER"; color: root.accent; font.bold: true
+                       font.pixelSize: 13; font.letterSpacing: 1 }
+                Item { width: parent.width - 150; height: 1 }
+                Text { text: assistant.callRoster.length + ""; color: "#7fb3c8"; font.pixelSize: 12 }
+            }
+            Rectangle { width: parent.width; height: 1
+                        color: Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.3) }
+            Text { visible: assistant.callRoster.length === 0
+                   text: assistant.stationOnline ? "Nessuna stazione in banda." : "Decodium offline."
+                   color: "#6f93a4"; font.pixelSize: 12; width: parent.width; wrapMode: Text.WordWrap }
+            ListView {
+                width: parent.width
+                height: parent.height - 50
+                clip: true; spacing: 4
+                model: assistant.callRoster
+                delegate: Rectangle {
+                    width: ListView.view.width; height: 40; radius: 6
+                    color: modelData.isCq ? Qt.rgba(0.25,0.95,0.6,0.12) : Qt.rgba(1,1,1,0.04)
+                    border.color: modelData.isCq ? Qt.rgba(0.25,0.95,0.6,0.4) : "transparent"
+                    border.width: 1
+                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                onClicked: assistant.sendText("dimmi qualcosa su " + modelData.call) }
+                    Row {
+                        anchors.fill: parent; anchors.leftMargin: 8; anchors.rightMargin: 8; spacing: 8
+                        Column {
+                            width: parent.width - 52; anchors.verticalCenter: parent.verticalCenter; spacing: 1
+                            Row { spacing: 5
+                                Text { text: modelData.call; color: "#eaf6fb"; font.bold: true
+                                       font.pixelSize: 13; font.family: "Consolas" }
+                                Text { visible: modelData.isCq; text: "CQ"; color: "#3df58a"
+                                       font.pixelSize: 9; font.bold: true
+                                       anchors.verticalCenter: parent.verticalCenter }
+                            }
+                            Text { text: modelData.country + (modelData.freq ? "  " + Math.round(modelData.freq) + " Hz" : "")
+                                   color: "#6f93a4"; font.pixelSize: 10; elide: Text.ElideRight
+                                   width: parent.width }
+                        }
+                        Text { text: (modelData.db > 0 ? "+" : "") + modelData.db
+                               color: modelData.db >= -10 ? "#3df58a" : (modelData.db >= -18 ? "#ffb02e" : "#ff7a7a")
+                               font.pixelSize: 12; font.family: "Consolas"; font.bold: true
+                               anchors.verticalCenter: parent.verticalCenter }
+                    }
                 }
             }
         }

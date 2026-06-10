@@ -5,6 +5,7 @@
 #include <QtQml/qqmlregistration.h>
 #include <QString>
 #include <QTimer>
+#include <QVariantList>
 #include "OllamaClient.h"
 #include "WhisperStt.h"
 
@@ -39,6 +40,8 @@ class Assistant : public QObject {
     Q_PROPERTY(bool stationOnline READ stationOnline NOTIFY stationChanged)
     Q_PROPERTY(QString stationLine1 READ stationLine1 NOTIFY stationChanged)  // modo · banda · freq
     Q_PROPERTY(QString stationLine2 READ stationLine2 NOTIFY stationChanged)  // attività · TX/decodifiche
+    // Call Roster dinamico: stazioni decodificate ora in banda (da Decodium).
+    Q_PROPERTY(QVariantList callRoster READ callRoster NOTIFY rosterChanged)
 
 public:
     enum State { Idle, Listening, Thinking, Speaking };
@@ -66,6 +69,7 @@ public:
     bool stationOnline() const { return m_stationOnline; }
     QString stationLine1() const { return m_stationLine1; }
     QString stationLine2() const { return m_stationLine2; }
+    QVariantList callRoster() const { return m_callRoster; }
 
     Q_INVOKABLE void sendText(const QString& text);
     Q_INVOKABLE void setListening(bool on);   // attiva/disattiva l'ascolto continuo
@@ -87,6 +91,7 @@ signals:
     void voiceChanged();
     void voiceEngineChanged();
     void stationChanged();
+    void rosterChanged();
     // Inoltrato a QML: uno strumento chiede conferma prima di scrivere.
     void confirmationRequested(const QString& title, const QString& detail);
 
@@ -113,10 +118,12 @@ private:
 
     // HUD stazione live: polling periodico dello stato di Decodium 4.
     void onHudTick();
+    void fetchRoster();             // legge /api/decodes -> call roster dinamico
     QTimer  m_hudTimer;
     QNetworkAccessManager* m_hudNet = nullptr;
     bool    m_stationOnline = false;
     QString m_stationLine1, m_stationLine2;
+    QVariantList m_callRoster;
 
     // ── Pilota automatico (Fase 3): tick periodico che fa "ragionare e agire" l'LLM
     // sulla banda usando i suoi tool (decodium, dxcluster, memoria, comandi). ──
