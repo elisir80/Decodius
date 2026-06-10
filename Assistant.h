@@ -31,6 +31,8 @@ class Assistant : public QObject {
     Q_PROPERTY(bool wakeWord READ wakeWord NOTIFY wakeWordChanged)
     // Voce TTS scelta (alias: giuseppe/diego/isabella/elsa).
     Q_PROPERTY(QString voice READ voice NOTIFY voiceChanged)
+    // Motore voce: "edge" (cloud), "piper" (locale offline), "clone" (la tua voce, XTTS).
+    Q_PROPERTY(QString voiceEngine READ voiceEngine NOTIFY voiceEngineChanged)
 
 public:
     enum State { Idle, Listening, Thinking, Speaking };
@@ -52,6 +54,9 @@ public:
     QString voice() const { return m_voice; }
     Q_INVOKABLE void setVoice(const QString& v);   // cambia voce italiana
     Q_INVOKABLE void cycleVoice();                 // cicla tra le voci disponibili
+    QString voiceEngine() const { return m_voiceEngine; }
+    Q_INVOKABLE void setVoiceEngine(const QString& e);  // edge | piper | clone
+    Q_INVOKABLE void cycleVoiceEngine();                // cicla i motori disponibili
 
     Q_INVOKABLE void sendText(const QString& text);
     Q_INVOKABLE void setListening(bool on);   // attiva/disattiva l'ascolto continuo
@@ -71,6 +76,7 @@ signals:
     void autoPilotChanged();
     void wakeWordChanged();
     void voiceChanged();
+    void voiceEngineChanged();
     // Inoltrato a QML: uno strumento chiede conferma prima di scrivere.
     void confirmationRequested(const QString& title, const QString& detail);
 
@@ -91,6 +97,8 @@ private:
     qint64 m_awakeUntilMs = 0;    // fino a quando accettare frasi senza ripetere la wake-word
     QString m_voice = QStringLiteral("giuseppe");   // voce italiana scelta
     static QString detectLang(const QString& text); // rileva la lingua del testo da pronunciare
+    QString m_voiceEngine = QStringLiteral("edge");  // motore voce attivo
+    void selectBackend();   // sceglie il backend TTS attivo in base a m_voiceEngine
 
     // ── Pilota automatico (Fase 3): tick periodico che fa "ragionare e agire" l'LLM
     // sulla banda usando i suoi tool (decodium, dxcluster, memoria, comandi). ──
@@ -118,9 +126,11 @@ private:
     void ttsSay(const QString& text);
     void ttsStop();
 
-    XttsTts*       m_xtts = nullptr;    // sintesi neurale XTTS v2 (preferita assoluta)
-    bool           m_xttsReady = false; // server XTTS pronto
-    bool           m_useXtts = false;   // XTTS attivo per la risposta corrente
+    XttsTts*       m_xtts = nullptr;    // client del server voce edge (cloud)
+    bool           m_xttsReady = false; // server edge pronto
+    bool           m_useXtts = false;   // edge attivo per la risposta corrente
+    XttsTts*       m_xttsClone = nullptr; // voce clonata (XTTS, server locale)
+    bool           m_useClone = false;    // clone attivo per la risposta corrente
     bool           m_xttsPausedForImage = false; // XTTS spento per liberare VRAM (query vision)
     PiperTts*      m_piper = nullptr;   // sintesi neurale Piper (fallback)
     bool           m_usePiper = false;

@@ -198,6 +198,16 @@ Assistant::Assistant(QObject* parent) : QObject(parent) {
         m_xtts->start();
     }
 
+    // Voce CLONATA (la tua): server XTTS locale + campione vocale (clone_0.wav).
+    // Avviato SOLO on-demand (carica il modello in VRAM, ~secondi) quando selezionato.
+    const QString xbase = appDir + QStringLiteral("/xtts");
+    QString xpy = appDir + QStringLiteral("/xttsenv/Scripts/python.exe");
+    if (!QFileInfo::exists(xpy)) xpy = appDir + QStringLiteral("/ttsenv/Scripts/python.exe");
+    m_xttsClone = new XttsTts(xpy, xbase + QStringLiteral("/server.py"),
+                              QString(), xbase + QStringLiteral("/clone_0.wav"), 5067, this);
+    if (m_xttsClone->isAvailable())
+        connect(m_xttsClone, &XttsTts::finished, this, [this]() { speakNext(); });
+
     // Fallback voce: Piper (CPU, cartella "piper/").
     const QString base = appDir + QStringLiteral("/piper");
     m_piper = new PiperTts(base + QStringLiteral("/piper.exe"),
@@ -242,10 +252,25 @@ Assistant::Assistant(QObject* parent) : QObject(parent) {
 // m_useXtts viene "congelato" a inizio risposta (vedi sendText) per non
 // cambiare voce a metà di una risposta.
 bool Assistant::ttsBusy() const {
+    if (m_useClone) return m_xttsClone->isBusy();
     if (m_useXtts) return m_xtts->isBusy();
     if (m_usePiper) return m_piper->isBusy();
     return m_tts && (m_tts->state() == QTextToSpeech::Speaking ||
                      m_tts->state() == QTextToSpeech::Paused);
+}
+
+// Sceglie il backend TTS attivo in base al motore selezionato, con fallback.
+void Assistant::selectBackend() {
+    m_useClone = m_useXtts = m_usePiper = false;
+    if (m_voiceEngine == QStringLiteral("clone") && m_xttsClone && m_xttsClone->isReady())
+        m_useClone = true;
+    else if (m_voiceEngine == QStringLiteral("piper") && m_piper && m_piper->isAvailable())
+        m_usePiper = true;
+    else if (m_xtts && m_xtts->isAvailable())
+        m_useXtts = true;                                   // edge (default)
+    else if (m_piper && m_piper->isAvailable())
+        m_usePiper = true;                                  // fallback
+    // altrimenti resta QTextToSpeech
 }
 // Rileva la lingua del testo da pronunciare con una semplice euristica a stopword.
 // Serve per rispondere nella lingua dell'interlocutore (QSO DX). Default: italiano.
@@ -288,6 +313,39 @@ void Assistant::cycleVoice() {
     setVoice(voci.at((i + 1) % voci.size()));
 }
 
+// Cambia il motore voce: "edge" (cloud), "piper" (locale), "clone" (la tua voce).
+void Assistant::setVoiceEngine(const QString& e) {
+    const QString ne = e.trimmed().toLower();
+    if (ne != QStringLiteral("edge") && ne != QStringLiteral("piper") && ne != QStringLiteral("clone")) return;
+    if (ne == m_voiceEngine) return;
+    m_voiceEngine = ne;
+    emit voiceEngineChanged();
+#ifdef HAVE_TTS
+    QString msg;
+    if (ne == QStringLiteral("clone")) {
+        if (m_xttsClone && m_xttsClone->isAvailable()) {
+            if (!m_xttsClone->isReady()) m_xttsClone->start();   // carica il modello (lento)
+            msg = QStringLiteral("Voce clonata in caricamento, un momento.");
+        } else {
+            m_voiceEngine = QStringLiteral("edge"); emit voiceEngineChanged();
+            msg = QStringLiteral("Voce clonata non disponibile, resto sulla voce cloud.");
+        }
+    } else if (ne == QStringLiteral("piper")) {
+        msg = QStringLiteral("Voce locale attivata.");
+    } else {
+        msg = QStringLiteral("Voce cloud attivata.");
+    }
+    selectBackend();
+    m_streaming = false; ttsStop(); ttsSay(msg);
+#endif
+}
+
+void Assistant::cycleVoiceEngine() {
+    if (m_voiceEngine == QStringLiteral("edge")) setVoiceEngine(QStringLiteral("piper"));
+    else if (m_voiceEngine == QStringLiteral("piper")) setVoiceEngine(QStringLiteral("clone"));
+    else setVoiceEngine(QStringLiteral("edge"));
+}
+
 void Assistant::ttsSay(const QString& text) {
 #ifdef HAVE_TTS
     // Multilingua: se il testo è in un'altra lingua, usa la voce di quella lingua;
@@ -298,12 +356,14 @@ void Assistant::ttsSay(const QString& text) {
         else                              { m_xtts->setVoice(QString()); m_xtts->setLang(lang); }
     }
 #endif
-    if (m_useXtts) m_xtts->say(text);
+    if (m_useClone) m_xttsClone->say(text);
+    else if (m_useXtts) m_xtts->say(text);
     else if (m_usePiper) m_piper->say(text);
     else if (m_tts) m_tts->say(text);
 }
 void Assistant::ttsStop() {
     if (m_xtts) m_xtts->stop();
+    if (m_xttsClone) m_xttsClone->stop();
     if (m_piper) m_piper->stop();
     if (m_tts) m_tts->stop();
 }
@@ -411,6 +471,16 @@ void Assistant::sendText(const QString& text) {
         setAutoPilot(false);
         return;
     }
+    // Comando: cambia motore voce (cloud / locale / clonata).
+    if (low.contains(QStringLiteral("voce")) &&
+        (low.contains(QStringLiteral("locale")) || low.contains(QStringLiteral("cloud"))
+         || low.contains(QStringLiteral("clonata")) || low.contains(QStringLiteral("clone"))
+         || low.contains(QStringLiteral("la tua voce")))) {
+        if (low.contains(QStringLiteral("locale"))) setVoiceEngine(QStringLiteral("piper"));
+        else if (low.contains(QStringLiteral("cloud"))) setVoiceEngine(QStringLiteral("edge"));
+        else setVoiceEngine(QStringLiteral("clone"));   // clonata / la tua voce
+        return;
+    }
     // Comando: attiva/disattiva le "mani libere" (ascolto continuo con wake-word).
     if (low.contains(QStringLiteral("mani libere")) || low.contains(QStringLiteral("wake word"))
         || low.contains(QStringLiteral("parola di attivazione"))) {
@@ -429,7 +499,7 @@ void Assistant::sendText(const QString& text) {
     m_streaming = true;              // prima dello stop, così non scatta Idle
     // SOLO Kokoro: se il server voce è disponibile lo uso sempre (mai Piper/voce di
     // sistema, che suonerebbero diversi). Il server è persistente, quindi pronto.
-    m_useXtts = (m_xtts && m_xtts->isAvailable());
+    selectBackend();                 // edge/piper/clone in base al motore scelto
     m_ttsQueue.clear();
     m_ttsPending.clear();
     m_ttsChunk.clear();

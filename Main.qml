@@ -531,6 +531,14 @@ Window {
                     baseColor: "#10202b"
                     onClicked: assistant.cycleVoice()
                 }
+                // Motore voce: ☁ cloud (edge) / 💻 locale (piper) / 👤 clone (la tua)
+                PillButton {
+                    text: assistant.voiceEngine === "clone" ? "👤"
+                          : (assistant.voiceEngine === "piper" ? "💻" : "☁")
+                    fg: root.accent
+                    baseColor: "#10202b"
+                    onClicked: assistant.cycleVoiceEngine()
+                }
             }
         }
     }
