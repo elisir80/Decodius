@@ -13,13 +13,17 @@ Window {
 
     Shortcut { sequences: ["Escape"]; onActivated: assistant.interrupt() }
 
-    // Stato -> colore d'accento ("umore" di Decodius)
+    // Temi colore: tinta base a riposo (blu / ambra / verde / rosso notte)
+    property var themeColors: ["#36b6e0", "#ffb02e", "#3dffa0", "#ff6a6a"]
+    property var themeNames: ["Blu", "Ambra", "Verde", "Notte"]
+    property int themeIndex: 0
+    // Stato -> colore d'accento ("umore" di Decodius); a riposo usa il tema scelto
     property color accent: {
         switch (assistant.state) {
         case Assistant.Listening: return "#2de2ff";
         case Assistant.Thinking:  return "#ffb02e";
         case Assistant.Speaking:  return "#3dffa0";
-        default:                  return "#36b6e0";
+        default:                  return root.themeColors[root.themeIndex];
         }
     }
     property string stateText: {
@@ -187,6 +191,28 @@ Window {
                     loops: Animation.Infinite
                     NumberAnimation { to: 1; duration: 1700; easing.type: Easing.InOutSine }
                     NumberAnimation { to: 0; duration: 1700; easing.type: Easing.InOutSine }
+                }
+
+                // Anello spettrale: barre radiali alimentate dallo SPETTRO AUDIO REALE (FFT).
+                Item {
+                    anchors.fill: parent
+                    z: 3
+                    Repeater {
+                        model: analyzer.levels
+                        Item {
+                            width: orb.width; height: orb.height
+                            rotation: index * 360.0 / Math.max(1, analyzer.levels.length)
+                            Rectangle {
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                y: 14
+                                width: 3
+                                height: 4 + Math.min(1, modelData) * 58
+                                radius: 1.5
+                                antialiasing: true
+                                color: Qt.rgba(0.25, 0.95, 0.6, 0.30 + Math.min(1, modelData) * 0.65)
+                            }
+                        }
+                    }
                 }
                 Behavior on react { NumberAnimation { duration: 120; easing.type: Easing.OutQuad } }
 
@@ -476,6 +502,33 @@ Window {
             }
         }
 
+        // ───────────────── QUICK ACTIONS (solo letture) ─────────────────
+        Flow {
+            Layout.fillWidth: true
+            spacing: 8
+            Repeater {
+                model: [
+                    { t: "📡 In banda", q: "cosa c'è in banda adesso?" },
+                    { t: "🌞 Propagazione", q: "com'è la propagazione?" },
+                    { t: "🌍 DX", q: "quali DX ci sono ora nel cluster?" },
+                    { t: "🧭 Stato", q: "qual è lo stato di Decodium?" }
+                ]
+                Rectangle {
+                    radius: 14; height: 30
+                    width: qaLabel.implicitWidth + 24
+                    color: qaMouse.containsMouse ? Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.18)
+                                                 : Qt.rgba(1,1,1,0.05)
+                    border.color: Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.35); border.width: 1
+                    Behavior on color { ColorAnimation { duration: 150 } }
+                    Text { id: qaLabel; anchors.centerIn: parent; text: modelData.t
+                           color: "#cfe6f0"; font.pixelSize: 12 }
+                    MouseArea { id: qaMouse; anchors.fill: parent; hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: assistant.sendText(modelData.q) }
+                }
+            }
+        }
+
         // ───────────────── INPUT BAR ─────────────────
         Rectangle {
             Layout.fillWidth: true
@@ -564,6 +617,13 @@ Window {
                     fg: root.accent
                     baseColor: "#10202b"
                     onClicked: assistant.cycleVoiceEngine()
+                }
+                // Tema colore (cicla blu/ambra/verde/notte)
+                PillButton {
+                    text: "🎨"
+                    fg: root.accent
+                    baseColor: "#10202b"
+                    onClicked: root.themeIndex = (root.themeIndex + 1) % root.themeColors.length
                 }
             }
         }

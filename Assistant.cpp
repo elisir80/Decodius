@@ -54,6 +54,19 @@ Assistant::Assistant(QObject* parent) : QObject(parent) {
     m_hudTimer.start();
     QTimer::singleShot(800, this, [this]() { onHudTick(); });
 
+    // Briefing vocale all'avvio: saluto + stato stazione (dopo che voce/HUD sono pronti).
+    QTimer::singleShot(6000, this, [this]() {
+        if (m_callSign.isEmpty() || m_state != Idle) return;   // primo avvio o già in uso: salta
+        QString b = QStringLiteral("Ciao %1, sono Decodius.").arg(m_callSign);
+        if (m_stationOnline && !m_stationLine1.isEmpty())
+            b += QStringLiteral(" Decodium è in %1.").arg(m_stationLine1);
+        b += QStringLiteral(" Sono pronto, dimmi pure.");
+        m_lastResponse = b; emit lastResponseChanged();
+#ifdef HAVE_TTS
+        selectBackend(); m_streaming = false; ttsStop(); ttsSay(b);
+#endif
+    });
+
     // Streaming: ogni token appena generato viene appeso e mostrato subito.
     connect(&m_ollama, &OllamaClient::tokenReceived, this, [this](const QString& chunk) {
         // Durante un tick del pilota automatico non mostro/pronuncio nulla in streaming:
