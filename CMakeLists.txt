@@ -28,6 +28,8 @@ qt_add_qml_module(decodius
     VERSION 1.0
     QML_FILES
         Main.qml
+    RESOURCES
+        world.png
     SOURCES
         AudioAnalyzer.h
         Assistant.h

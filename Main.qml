@@ -642,7 +642,8 @@ Window {
     // ───────── CALL ROSTER laterale (stazioni in banda, live da Decodium) ─────────
     Rectangle {
         id: rosterPanel
-        width: 250
+        width: 320
+        property bool mapView: false              // false=lista, true=mappa
         anchors.top: parent.top; anchors.bottom: parent.bottom; anchors.right: parent.right
         x: root.rosterOpen ? 0 : width            // scivola da destra
         color: Qt.rgba(0.03, 0.08, 0.11, 0.92)
@@ -654,17 +655,62 @@ Window {
             anchors.fill: parent; anchors.margins: 12; spacing: 8
             Row {
                 width: parent.width; spacing: 6
-                Text { text: "📋 CALL ROSTER"; color: root.accent; font.bold: true
-                       font.pixelSize: 13; font.letterSpacing: 1 }
-                Item { width: parent.width - 150; height: 1 }
-                Text { text: assistant.callRoster.length + ""; color: "#7fb3c8"; font.pixelSize: 12 }
+                Text { text: "📋 ROSTER"; color: root.accent; font.bold: true
+                       font.pixelSize: 13; font.letterSpacing: 1; anchors.verticalCenter: parent.verticalCenter }
+                Item { width: parent.width - 230; height: 1 }
+                // toggle Lista / Mappa
+                Rectangle { width: 44; height: 22; radius: 11
+                    color: !rosterPanel.mapView ? root.accent : Qt.rgba(1,1,1,0.06)
+                    Text { anchors.centerIn: parent; text: "Lista"; font.pixelSize: 10
+                           color: !rosterPanel.mapView ? "#04121a" : "#9fc0cf" }
+                    MouseArea { anchors.fill: parent; onClicked: rosterPanel.mapView = false } }
+                Rectangle { width: 48; height: 22; radius: 11
+                    color: rosterPanel.mapView ? root.accent : Qt.rgba(1,1,1,0.06)
+                    Text { anchors.centerIn: parent; text: "🗺 Mappa"; font.pixelSize: 10
+                           color: rosterPanel.mapView ? "#04121a" : "#9fc0cf" }
+                    MouseArea { anchors.fill: parent; onClicked: rosterPanel.mapView = true } }
+                Text { text: assistant.callRoster.length + ""; color: "#7fb3c8"; font.pixelSize: 12
+                       anchors.verticalCenter: parent.verticalCenter }
             }
             Rectangle { width: parent.width; height: 1
                         color: Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.3) }
+
+            // ── VISTA MAPPA: planisfero reale + marker delle stazioni ──
+            Rectangle {
+                visible: rosterPanel.mapView
+                width: parent.width; height: width / 2          // equirettangolare 2:1
+                color: "#06121b"; radius: 6; clip: true
+                Image {
+                    id: worldMap
+                    anchors.fill: parent
+                    source: "world.png"
+                    fillMode: Image.Stretch
+                    opacity: 0.92
+                }
+                Repeater {
+                    model: assistant.callRoster
+                    Rectangle {
+                        visible: modelData.lat !== undefined
+                        width: modelData.isCq ? 9 : 7; height: width; radius: width/2
+                        x: worldMap.width  * (modelData.lon + 180) / 360 - width/2
+                        y: worldMap.height * (90 - modelData.lat) / 180 - height/2
+                        color: modelData.isCq ? "#3df58a" : "#ffd24a"
+                        border.color: "#04121a"; border.width: 1
+                        ToolTip.visible: mkMouse.containsMouse
+                        ToolTip.text: modelData.call + " · " + (modelData.grid || "") + " · " + modelData.db + " dB"
+                        MouseArea { id: mkMouse; anchors.fill: parent; hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: assistant.sendText("dimmi qualcosa su " + modelData.call) }
+                    }
+                }
+                Text { anchors.bottom: parent.bottom; anchors.right: parent.right; anchors.margins: 4
+                       text: "🟢 CQ  🟡 attive"; color: "#9fc0cf"; font.pixelSize: 9 }
+            }
             Text { visible: assistant.callRoster.length === 0
                    text: assistant.stationOnline ? "Nessuna stazione in banda." : "Decodium offline."
                    color: "#6f93a4"; font.pixelSize: 12; width: parent.width; wrapMode: Text.WordWrap }
             ListView {
+                visible: !rosterPanel.mapView
                 width: parent.width
                 height: parent.height - 50
                 clip: true; spacing: 4

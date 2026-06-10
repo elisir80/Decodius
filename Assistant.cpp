@@ -431,6 +431,17 @@ void Assistant::onHudTick() {
     fetchRoster();   // aggiorna anche il call roster
 }
 
+// Locatore Maidenhead (es. JN61) -> lat/lon (centro del quadrato). Per la mappa.
+static bool gridToLatLon(const QString& g, double& lat, double& lon) {
+    const QString s = g.trimmed().toUpper();
+    if (s.size() < 4) return false;
+    if (s[0] < 'A' || s[0] > 'R' || s[1] < 'A' || s[1] > 'R') return false;
+    if (!s[2].isDigit() || !s[3].isDigit()) return false;
+    lon = (s[0].unicode() - 'A') * 20.0 - 180.0 + s[2].digitValue() * 2.0 + 1.0;
+    lat = (s[1].unicode() - 'A') * 10.0 - 90.0  + s[3].digitValue() * 1.0 + 0.5;
+    return true;
+}
+
 // Legge /api/decodes di Decodium e costruisce il call roster (stazioni in banda ora).
 void Assistant::fetchRoster() {
     const QString token = QSettings(QStringLiteral("Decodium"), QStringLiteral("Decodium3"))
@@ -458,6 +469,16 @@ void Assistant::fetchRoster() {
             m[QStringLiteral("country")] = d.value(QStringLiteral("dxCountry")).toString();
             m[QStringLiteral("freq")]    = d.value(QStringLiteral("freq")).toDouble();
             m[QStringLiteral("isCq")]    = d.value(QStringLiteral("isCQ")).toBool();
+            // Posizione sulla mappa dal locatore nel messaggio (es. "CQ IK0XYZ JN61").
+            static const QRegularExpression reGrid(QStringLiteral("\\b([A-R]{2}[0-9]{2})\\b"));
+            const QString msg = d.value(QStringLiteral("message")).toString().toUpper();
+            const auto gm = reGrid.match(msg);
+            double lat = 0, lon = 0;
+            if (gm.hasMatch() && gridToLatLon(gm.captured(1), lat, lon)) {
+                m[QStringLiteral("lat")] = lat;
+                m[QStringLiteral("lon")] = lon;
+                m[QStringLiteral("grid")] = gm.captured(1);
+            }
             roster.append(m);
         }
         m_callRoster = roster;
