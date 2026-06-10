@@ -147,6 +147,8 @@ Window {
                        font.pixelSize: 20; font.letterSpacing: 4 }
                 Text { text: "assistente radioamatoriale" + (assistant.callSign.length ? " · " + assistant.callSign : "")
                        color: "#6f93a4"; font.pixelSize: 11; font.letterSpacing: 1 }
+                Text { text: "v" + Qt.application.version
+                       color: "#4d6b78"; font.pixelSize: 10; font.letterSpacing: 1 }
             }
 
             // HUD stazione live (stato di Decodium 4) — in alto a destra
