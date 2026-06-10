@@ -29,6 +29,8 @@ class Assistant : public QObject {
     Q_PROPERTY(bool autoPilot READ autoPilot NOTIFY autoPilotChanged)
     // Wake-word "Decodius": in ascolto continuo reagisce solo dopo la parola di attivazione.
     Q_PROPERTY(bool wakeWord READ wakeWord NOTIFY wakeWordChanged)
+    // Voce TTS scelta (alias: giuseppe/diego/isabella/elsa).
+    Q_PROPERTY(QString voice READ voice NOTIFY voiceChanged)
 
 public:
     enum State { Idle, Listening, Thinking, Speaking };
@@ -47,6 +49,9 @@ public:
     Q_INVOKABLE void setAutoPilot(bool on);   // attiva/disattiva il pilota automatico
     bool wakeWord() const { return m_wakeWord; }
     Q_INVOKABLE void setWakeWord(bool on);    // attiva/disattiva la modalità a mani libere con wake-word
+    QString voice() const { return m_voice; }
+    Q_INVOKABLE void setVoice(const QString& v);   // cambia voce italiana
+    Q_INVOKABLE void cycleVoice();                 // cicla tra le voci disponibili
 
     Q_INVOKABLE void sendText(const QString& text);
     Q_INVOKABLE void setListening(bool on);   // attiva/disattiva l'ascolto continuo
@@ -65,6 +70,7 @@ signals:
     void callSignChanged();
     void autoPilotChanged();
     void wakeWordChanged();
+    void voiceChanged();
     // Inoltrato a QML: uno strumento chiede conferma prima di scrivere.
     void confirmationRequested(const QString& title, const QString& detail);
 
@@ -83,6 +89,8 @@ private:
     // (o se siamo ancora nella finestra di "veglia" dopo l'ultima interazione).
     bool   m_wakeWord = false;
     qint64 m_awakeUntilMs = 0;    // fino a quando accettare frasi senza ripetere la wake-word
+    QString m_voice = QStringLiteral("giuseppe");   // voce italiana scelta
+    static QString detectLang(const QString& text); // rileva la lingua del testo da pronunciare
 
     // ── Pilota automatico (Fase 3): tick periodico che fa "ragionare e agire" l'LLM
     // sulla banda usando i suoi tool (decodium, dxcluster, memoria, comandi). ──

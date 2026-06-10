@@ -247,7 +247,57 @@ bool Assistant::ttsBusy() const {
     return m_tts && (m_tts->state() == QTextToSpeech::Speaking ||
                      m_tts->state() == QTextToSpeech::Paused);
 }
+// Rileva la lingua del testo da pronunciare con una semplice euristica a stopword.
+// Serve per rispondere nella lingua dell'interlocutore (QSO DX). Default: italiano.
+QString Assistant::detectLang(const QString& text) {
+    const QString t = QStringLiteral(" ") + text.toLower() + QStringLiteral(" ");
+    struct L { const char* code; const char* words; };
+    static const L langs[] = {
+        {"it", " che di il la e sono per con non una ciao sei come grazie "},
+        {"en", " the and is you to of for with are this hello what your thanks "},
+        {"de", " der die das und ist ich nicht mit ein sie wie danke hallo "},
+        {"es", " que de la el y es por con no una hola como gracias "},
+        {"fr", " le la de et est je pas avec une bonjour comment merci "},
+    };
+    int best = 0; QString bestCode = QStringLiteral("it");
+    for (const L& l : langs) {
+        int score = 0;
+        const QStringList ws = QString::fromLatin1(l.words).split(' ', Qt::SkipEmptyParts);
+        for (const QString& w : ws)
+            if (t.contains(QStringLiteral(" ") + w + QStringLiteral(" "))) ++score;
+        if (score > best) { best = score; bestCode = QString::fromLatin1(l.code); }
+    }
+    return bestCode;
+}
+
+void Assistant::setVoice(const QString& v) {
+    const QString nv = v.trimmed().toLower();
+    if (nv.isEmpty() || nv == m_voice) return;
+    m_voice = nv;
+    emit voiceChanged();
+#ifdef HAVE_TTS
+    if (m_xtts) m_xtts->setVoice(m_voice);
+    ttsStop(); ttsSay(QStringLiteral("Voce cambiata."));
+#endif
+}
+
+void Assistant::cycleVoice() {
+    static const QStringList voci = {QStringLiteral("giuseppe"), QStringLiteral("diego"),
+                                     QStringLiteral("isabella"), QStringLiteral("elsa")};
+    const int i = voci.indexOf(m_voice);
+    setVoice(voci.at((i + 1) % voci.size()));
+}
+
 void Assistant::ttsSay(const QString& text) {
+#ifdef HAVE_TTS
+    // Multilingua: se il testo è in un'altra lingua, usa la voce di quella lingua;
+    // altrimenti la voce italiana scelta dall'utente.
+    if (m_useXtts && m_xtts) {
+        const QString lang = detectLang(text);
+        if (lang == QStringLiteral("it")) { m_xtts->setLang(QString()); m_xtts->setVoice(m_voice); }
+        else                              { m_xtts->setVoice(QString()); m_xtts->setLang(lang); }
+    }
+#endif
     if (m_useXtts) m_xtts->say(text);
     else if (m_usePiper) m_piper->say(text);
     else if (m_tts) m_tts->say(text);

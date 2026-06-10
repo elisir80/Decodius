@@ -124,8 +124,10 @@ void XttsTts::say(const QString& text) {
     m_stopping = false;
     m_busy = true;
 
-    const QByteArray body = QJsonDocument(
-        QJsonObject{{"text", text}}).toJson(QJsonDocument::Compact);
+    QJsonObject payload{{"text", text}};
+    if (!m_voice.isEmpty()) payload["voice"] = m_voice;
+    if (!m_lang.isEmpty())  payload["lang"]  = m_lang;
+    const QByteArray body = QJsonDocument(payload).toJson(QJsonDocument::Compact);
     QNetworkRequest req{ QUrl(m_host + QStringLiteral("/tts")) };
     req.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
     m_ttsReply = m_net->post(req, body);

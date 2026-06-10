@@ -524,6 +524,13 @@ Window {
                     baseColor: assistant.autoPilot ? "#ff8c42" : "#10202b"
                     onClicked: assistant.setAutoPilot(!assistant.autoPilot)
                 }
+                // Selettore voce (cicla: Giuseppe/Diego/Isabella/Elsa)
+                PillButton {
+                    text: "🗣" + (assistant.voice.length ? assistant.voice.charAt(0).toUpperCase() : "")
+                    fg: root.accent
+                    baseColor: "#10202b"
+                    onClicked: assistant.cycleVoice()
+                }
             }
         }
     }

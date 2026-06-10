@@ -31,6 +31,8 @@ public:
     void stopServer();               // spegne il server (libera VRAM); start() lo riavvia
     void say(const QString& text);   // sintetizza e riproduce un blocco
     void stop();                     // interrompe richiesta e riproduzione correnti
+    void setVoice(const QString& v) { m_voice = v; }  // alias/nome voce edge (vuoto = default)
+    void setLang(const QString& l)  { m_lang = l; }   // lingua per la voce (vuoto = default it)
 
 signals:
     void finished();                 // riproduzione del blocco terminata (idle)
@@ -44,6 +46,7 @@ private:
     void onPlaybackFinished();
 
     QString m_python, m_script, m_speaker, m_speakerWav, m_host;
+    QString m_voice, m_lang;     // override voce/lingua inviati al server TTS
     int     m_port;
     bool    m_available = false;
     bool    m_ready = false;
