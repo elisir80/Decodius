@@ -3,16 +3,21 @@ DECODIUS — Assistente vocale radioamatoriale
 
 GRAZIE per aver installato Decodius!
 
-NOVITA' 1.5 ALPHA
+NOVITA' 1.7 ALPHA
 -----------------
 - Memoria persistente: Decodius ricorda QSO, stazioni e tue preferenze.
 - Conoscenza live: DX Cluster mondiale + propagazione avanzata.
 - Pilota automatico (pulsante 🤖): opera la stazione in autonomia.
   Comandi: "attiva/ferma il pilota automatico".
 - Mani libere (pulsante 🎙): ascolto continuo con wake-word "Decodius".
-  Comandi: "mani libere" / "ferma mani libere".
 - Integrazione DECODIUM 4: lettura live + comandi (chiama una stazione
   in FT8/FT4/FT2, anche "chiama la piu' forte").
+- Cervello configurabile: Ollama (gpt-oss:120b) oppure provider cloud
+  (NVIDIA NIM, OpenRouter, DeepSeek, Gemini) via decodius_provider.txt.
+- Voce evoluta: 4 voci IT + multilingua, motori cloud/locale/clone (la tua
+  voce), nominativi sillabati in alfabeto fonetico NATO.
+- UI cruscotto: HUD stato Decodium live, anello spettrale reale, temi
+  colore, quick actions, briefing vocale all'avvio.
 
 PRIMO AVVIO
 -----------
