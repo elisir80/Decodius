@@ -1083,6 +1083,20 @@ void OllamaClient::onFinished() {
 // Registra il messaggio dell'assistente con le sue tool_calls e avvia
 // l'esecuzione sequenziale (così i tool async non si pestano i piedi).
 void OllamaClient::handleToolCalls() {
+    // Provider OpenAI-compat (NVIDIA, ecc.): "arguments" DEVE essere una stringa JSON
+    // valida. Per i tool con soli parametri opzionali il modello può ometterli ("")
+    // -> lo normalizzo a "{}", altrimenti il round successivo viene rifiutato (400).
+    if (m_openai) {
+        for (int i = 0; i < m_toolCalls.size(); ++i) {
+            QJsonObject c = m_toolCalls.at(i).toObject();
+            QJsonObject fn = c.value("function").toObject();
+            if (fn.value("arguments").toString().trimmed().isEmpty()) {
+                fn["arguments"] = QStringLiteral("{}");
+                c["function"] = fn;
+                m_toolCalls[i] = c;
+            }
+        }
+    }
     m_history.append(QJsonObject{
         {"role", "assistant"},
         {"content", m_acc},
@@ -1299,7 +1313,13 @@ static QString freqToBand(double khz) {
 // DX Cluster live: spot recenti da dxwatch.com (JSON). Opzionale filtro 'banda'.
 // Risposta dxwatch: {"s":{ "<id>": [spotter, freqKHz, dxCall, info, time, ...], ... }}
 void OllamaClient::runDxCluster(const QJsonObject& args, std::function<void(QString)> done) {
-    const QString bandaWanted = args.value("banda").toString().trimmed().toLower();
+    QString bandaWanted = args.value("banda").toString().trimmed().toLower();
+    // "tutte/all/qualsiasi" o varianti = nessun filtro di banda (mostra tutti gli spot).
+    if (bandaWanted == QStringLiteral("tutte") || bandaWanted == QStringLiteral("tutto")
+        || bandaWanted == QStringLiteral("tutti") || bandaWanted == QStringLiteral("all")
+        || bandaWanted == QStringLiteral("qualsiasi") || bandaWanted == QStringLiteral("any")
+        || bandaWanted.contains(QStringLiteral("tutte")) || bandaWanted.contains(QStringLiteral("ogni")))
+        bandaWanted.clear();
     QNetworkRequest req(QUrl(QStringLiteral("https://www.dxwatch.com/dxsd1/s.php?s=0&r=30")));
     req.setHeader(QNetworkRequest::UserAgentHeader,
                   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Decodius/1.4");
