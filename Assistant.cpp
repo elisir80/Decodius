@@ -16,6 +16,9 @@
 #include <QNetworkAccessManager>
 #include <QNetworkRequest>
 #include <QNetworkReply>
+#include <QHash>
+#include <QSet>
+#include <QList>
 
 static const char* kSystemPrompt =
     "Ti chiami Decodius. Sei l'assistente personale di Martino, radioamatore (IU8LMC) "
@@ -425,7 +428,46 @@ void Assistant::onHudTick() {
     });
 }
 
+// Espande i nominativi (call) in alfabeto fonetico NATO per la SOLA pronuncia, così
+// "IK0XYZ" viene letto "India Kilo Zero X-ray Yankee Zulu". La chat resta col call.
+QString Assistant::phonetic(const QString& text) {
+    static const QHash<QChar, QString> nato = {
+        {'A',"Alfa"},{'B',"Bravo"},{'C',"Charlie"},{'D',"Delta"},{'E',"Echo"},
+        {'F',"Foxtrot"},{'G',"Golf"},{'H',"Hotel"},{'I',"India"},{'J',"Juliett"},
+        {'K',"Kilo"},{'L',"Lima"},{'M',"Mike"},{'N',"November"},{'O',"Oscar"},
+        {'P',"Papa"},{'Q',"Quebec"},{'R',"Romeo"},{'S',"Sierra"},{'T',"Tango"},
+        {'U',"Uniform"},{'V',"Victor"},{'W',"Whiskey"},{'X',"X-ray"},{'Y',"Yankee"},{'Z',"Zulu"},
+        // numeri in italiano (Decodius parla italiano): naturali con la voce
+        {'0',"zero"},{'1',"uno"},{'2',"due"},{'3',"tre"},{'4',"quattro"},
+        {'5',"cinque"},{'6',"sei"},{'7',"sette"},{'8',"otto"},{'9',"nove"}
+    };
+    // Sigle da NON sillabare (modi/termini), per evitare falsi positivi.
+    static const QSet<QString> skip = {
+        "FT8","FT4","FT2","FST4","FST4W","JT65","JT9","JT4","MSK144","Q65","SSB","CW",
+        "RTTY","AM","FM","USB","LSB","UTC","QRZ","QSO","QRP","QRO","QSY","QSB","QRM",
+        "QRN","DX","RST","SOTA","POTA","IOTA","ADIF","MHZ","KHZ","HF","VHF","UHF"
+    };
+    QRegularExpression re(QStringLiteral("\\b[A-Z0-9]{3,8}\\b"));
+    QRegularExpression reDigit(QStringLiteral("[0-9]")), reAlpha(QStringLiteral("[A-Z]")),
+                       reBand(QStringLiteral("^[0-9]+M$"));
+    QString out = text;
+    auto it = re.globalMatch(text);
+    QList<QRegularExpressionMatch> matches;
+    while (it.hasNext()) matches.append(it.next());
+    for (int i = matches.size() - 1; i >= 0; --i) {       // dal fondo: gli indici restano validi
+        const QString tok = matches[i].captured();
+        if (!tok.contains(reDigit) || !tok.contains(reAlpha)) continue;  // serve mix lettere+cifre
+        if (skip.contains(tok)) continue;
+        if (reBand.match(tok).hasMatch()) continue;       // banda tipo 20M/40M
+        QString ph;
+        for (const QChar& c : tok) ph += nato.value(c.toUpper(), QString(c)) + QStringLiteral(" ");
+        out.replace(matches[i].capturedStart(), matches[i].capturedLength(), ph.trimmed());
+    }
+    return out;
+}
+
 void Assistant::ttsSay(const QString& text) {
+    const QString spoken = phonetic(text);   // sillaba i call in NATO solo per la voce
 #ifdef HAVE_TTS
     // Multilingua: se il testo è in un'altra lingua, usa la voce di quella lingua;
     // altrimenti la voce italiana scelta dall'utente.
@@ -435,10 +477,10 @@ void Assistant::ttsSay(const QString& text) {
         else                              { m_xtts->setVoice(QString()); m_xtts->setLang(lang); }
     }
 #endif
-    if (m_useClone) m_xttsClone->say(text);
-    else if (m_useXtts) m_xtts->say(text);
-    else if (m_usePiper) m_piper->say(text);
-    else if (m_tts) m_tts->say(text);
+    if (m_useClone) m_xttsClone->say(spoken);
+    else if (m_useXtts) m_xtts->say(spoken);
+    else if (m_usePiper) m_piper->say(spoken);
+    else if (m_tts) m_tts->say(spoken);
 }
 void Assistant::ttsStop() {
     if (m_xtts) m_xtts->stop();

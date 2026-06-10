@@ -107,6 +107,7 @@ private:
     qint64 m_awakeUntilMs = 0;    // fino a quando accettare frasi senza ripetere la wake-word
     QString m_voice = QStringLiteral("giuseppe");   // voce italiana scelta
     static QString detectLang(const QString& text); // rileva la lingua del testo da pronunciare
+    static QString phonetic(const QString& text);    // espande i nominativi in alfabeto fonetico NATO (solo per il TTS)
     QString m_voiceEngine = QStringLiteral("edge");  // motore voce attivo
     void selectBackend();   // sceglie il backend TTS attivo in base a m_voiceEngine
 
