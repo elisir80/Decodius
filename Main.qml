@@ -145,6 +145,32 @@ Window {
                        color: "#6f93a4"; font.pixelSize: 11; font.letterSpacing: 1 }
             }
 
+            // HUD stazione live (stato di Decodium 4) — in alto a destra
+            Rectangle {
+                anchors.right: parent.right; anchors.top: parent.top
+                width: Math.max(hudCol.implicitWidth + 28, 200); height: hudCol.implicitHeight + 18
+                radius: 10
+                color: Qt.rgba(0.04, 0.10, 0.14, 0.55)
+                border.color: assistant.stationOnline ? Qt.rgba(0.3,0.95,0.6,0.5) : Qt.rgba(0.5,0.5,0.5,0.3)
+                border.width: 1
+                Column {
+                    id: hudCol
+                    anchors.centerIn: parent; spacing: 3
+                    Row {
+                        spacing: 6
+                        Rectangle { width: 8; height: 8; radius: 4; anchors.verticalCenter: parent.verticalCenter
+                                    color: assistant.stationOnline ? "#3df58a" : "#ff5d72" }
+                        Text { text: "DECODIUM " + (assistant.stationOnline ? "ONLINE" : "offline")
+                               color: assistant.stationOnline ? "#9fe7c0" : "#8aa0ab"
+                               font.pixelSize: 10; font.bold: true; font.letterSpacing: 1 }
+                    }
+                    Text { visible: assistant.stationOnline; text: assistant.stationLine1
+                           color: "#eaf6fb"; font.pixelSize: 13; font.family: "Consolas"; font.bold: true }
+                    Text { visible: assistant.stationOnline; text: assistant.stationLine2
+                           color: "#7fb3c8"; font.pixelSize: 11; font.family: "Consolas" }
+                }
+            }
+
             // ORB (più grande)
             Item {
                 id: orb

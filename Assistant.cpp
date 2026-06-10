@@ -10,6 +10,12 @@
 #include <QUrl>
 #include <QTimer>
 #include <QDateTime>
+#include <QSettings>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QNetworkAccessManager>
+#include <QNetworkRequest>
+#include <QNetworkReply>
 
 static const char* kSystemPrompt =
     "Ti chiami Decodius. Sei l'assistente personale di Martino, radioamatore (IU8LMC) "
@@ -40,6 +46,13 @@ Assistant::Assistant(QObject* parent) : QObject(parent) {
     m_autoTimer.setInterval(20000);   // un ciclo ogni 20 s
     m_autoTimer.setSingleShot(false);
     connect(&m_autoTimer, &QTimer::timeout, this, &Assistant::onAutoTick);
+
+    // HUD stazione live: polling dello stato di Decodium 4 ogni 3 s.
+    m_hudNet = new QNetworkAccessManager(this);
+    m_hudTimer.setInterval(3000);
+    connect(&m_hudTimer, &QTimer::timeout, this, &Assistant::onHudTick);
+    m_hudTimer.start();
+    QTimer::singleShot(800, this, [this]() { onHudTick(); });
 
     // Streaming: ogni token appena generato viene appeso e mostrato subito.
     connect(&m_ollama, &OllamaClient::tokenReceived, this, [this](const QString& chunk) {
@@ -344,6 +357,59 @@ void Assistant::cycleVoiceEngine() {
     if (m_voiceEngine == QStringLiteral("edge")) setVoiceEngine(QStringLiteral("piper"));
     else if (m_voiceEngine == QStringLiteral("piper")) setVoiceEngine(QStringLiteral("clone"));
     else setVoiceEngine(QStringLiteral("edge"));
+}
+
+// Banda amatoriale da frequenza in Hz (per l'HUD).
+static QString bandFromHz(double hz) {
+    const double k = hz / 1000.0;
+    if (k >= 1800 && k <= 2000) return QStringLiteral("160m");
+    if (k >= 3500 && k <= 4000) return QStringLiteral("80m");
+    if (k >= 5300 && k <= 5410) return QStringLiteral("60m");
+    if (k >= 7000 && k <= 7300) return QStringLiteral("40m");
+    if (k >= 10100 && k <= 10150) return QStringLiteral("30m");
+    if (k >= 14000 && k <= 14350) return QStringLiteral("20m");
+    if (k >= 18068 && k <= 18168) return QStringLiteral("17m");
+    if (k >= 21000 && k <= 21450) return QStringLiteral("15m");
+    if (k >= 24890 && k <= 24990) return QStringLiteral("12m");
+    if (k >= 28000 && k <= 29700) return QStringLiteral("10m");
+    if (k >= 50000 && k <= 54000) return QStringLiteral("6m");
+    if (k >= 144000 && k <= 148000) return QStringLiteral("2m");
+    if (k >= 430000 && k <= 440000) return QStringLiteral("70cm");
+    return QStringLiteral("—");
+}
+
+// Un ciclo dell'HUD: legge /api/state di Decodium 4 e aggiorna le righe di stato.
+void Assistant::onHudTick() {
+    const QString token = QSettings(QStringLiteral("Decodium"), QStringLiteral("Decodium3"))
+                              .value(QStringLiteral("WebServerAccessToken")).toString().trimmed();
+    QUrl url(QStringLiteral("http://127.0.0.1:8080/api/state?token=") + token);
+    QNetworkReply* r = m_hudNet->get(QNetworkRequest(url));
+    QTimer::singleShot(2500, r, [r]() { if (r->isRunning()) r->abort(); });
+    connect(r, &QNetworkReply::finished, this, [this, r]() {
+        r->deleteLater();
+        bool online = false; QString l1, l2;
+        if (r->error() == QNetworkReply::NoError) {
+            const QJsonObject o = QJsonDocument::fromJson(r->readAll()).object();
+            if (!o.isEmpty()) {
+                online = true;
+                const QString mode = o.value(QStringLiteral("mode")).toString();
+                const double dial = o.value(QStringLiteral("dialFrequency")).toDouble();
+                l1 = QStringLiteral("%1 · %2 · %3 MHz").arg(
+                        mode.isEmpty() ? QStringLiteral("—") : mode,
+                        bandFromHz(dial), QString::number(dial / 1e6, 'f', 3));
+                const bool tx = o.value(QStringLiteral("transmitting")).toBool();
+                const int dc = o.value(QStringLiteral("decodesCount")).toInt();
+                const QString dx = o.value(QStringLiteral("dxCall")).toString();
+                if (tx) l2 = QStringLiteral("● TX in corso");
+                else l2 = QStringLiteral("%1 decodifiche%2").arg(dc).arg(
+                        dx.isEmpty() ? QString() : QStringLiteral(" · DX %1").arg(dx));
+            }
+        }
+        if (online != m_stationOnline || l1 != m_stationLine1 || l2 != m_stationLine2) {
+            m_stationOnline = online; m_stationLine1 = l1; m_stationLine2 = l2;
+            emit stationChanged();
+        }
+    });
 }
 
 void Assistant::ttsSay(const QString& text) {
