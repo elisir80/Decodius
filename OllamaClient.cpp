@@ -1495,12 +1495,22 @@ void OllamaClient::runDecodiumCommand(const QJsonObject& args, std::function<voi
             return;
         }
         const QJsonObject o = QJsonDocument::fromJson(r->readAll()).object();
-        const QString status = o.value("status").toString();
+        const QString status = o.value("status").toString().toLower();
         const QString reason = o.value("reason").toString(o.value("error").toString());
-        QString msg = QStringLiteral("Comando '%1' inviato a Decodium").arg(cmd);
-        if (!status.isEmpty()) msg += QStringLiteral(": %1").arg(status);
-        if (!reason.isEmpty()) msg += QStringLiteral(" (%1)").arg(reason);
-        done(msg);
+        // Interpreta l'esito e restituisci un messaggio CHIARO in italiano: l'LLM deve
+        // capire subito se il comando è RIUSCITO (e confermarlo, non dire "non posso").
+        const bool ok = status.startsWith("accepted") || status.startsWith("deferred")
+                     || status.startsWith("queued") || status.contains("immediate")
+                     || status == QStringLiteral("ok") || status.isEmpty();
+        const bool rejected = status.contains("rejected") || status.contains("error");
+        if (ok)
+            done(QStringLiteral("ESEGUITO: il comando '%1' è stato accettato da Decodium. "
+                                "Conferma all'utente che è fatto.").arg(cmd));
+        else if (rejected)
+            done(QStringLiteral("Decodium ha RIFIUTATO il comando '%1'%2.").arg(cmd,
+                 reason.isEmpty() ? QString() : QStringLiteral(" (%1)").arg(reason)));
+        else
+            done(QStringLiteral("Comando '%1' inviato a Decodium (stato: %2).").arg(cmd, status));
     });
 }
 
