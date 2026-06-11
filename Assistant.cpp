@@ -22,6 +22,7 @@
 #include <QSet>
 #include <QList>
 #include <QProcess>
+#include <QUrlQuery>
 
 static const char* kSystemPrompt =
     "Ti chiami Decodius. Sei l'assistente personale di Martino, radioamatore (IU8LMC) "
@@ -543,6 +544,108 @@ void Assistant::saveProvider(const QString& baseUrl, const QString& apiKey, cons
     }
 }
 
+// ── Scheda nominativo (QRZ-like) con dati HamQTH ──
+void Assistant::hideCard() { m_cardVisible = false; emit cardChanged(); }
+
+void Assistant::showCard(const QString& call) {
+    const QString c = call.trimmed().toUpper();
+    if (c.isEmpty()) return;
+    m_callCard = QVariantMap{{QStringLiteral("call"), c}, {QStringLiteral("loading"), true}};
+    m_cardVisible = true;
+    emit cardChanged();
+    hamLookup(c);
+}
+
+// Recupera i dati di un nominativo da HamQTH (login riusato) e popola la scheda.
+void Assistant::hamLookup(const QString& call) {
+    // Credenziali da decodius_hamqth.txt (riga1 user, riga2 password).
+    QString user, pass;
+    QFile f(QCoreApplication::applicationDirPath() + QStringLiteral("/decodius_hamqth.txt"));
+    if (f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        const QStringList lines = QString::fromUtf8(f.readAll()).split('\n');
+        if (lines.size() >= 1) user = lines.at(0).trimmed();
+        if (lines.size() >= 2) pass = lines.at(1).trimmed();
+        f.close();
+    }
+    if (user.isEmpty() || pass.isEmpty()) {
+        m_callCard.insert(QStringLiteral("loading"), false);
+        m_callCard.insert(QStringLiteral("error"), QStringLiteral("Credenziali HamQTH mancanti."));
+        emit cardChanged();
+        return;
+    }
+
+    auto pick = [](const QString& xml, const QString& tag) -> QString {
+        QRegularExpression re(QStringLiteral("<%1>(.*?)</%1>").arg(tag),
+                              QRegularExpression::DotMatchesEverythingOption);
+        const auto m = re.match(xml);
+        return m.hasMatch() ? m.captured(1).trimmed() : QString();
+    };
+
+    auto doLookup = [this, call, pick](const QString& sid) {
+        QUrl url(QStringLiteral("https://www.hamqth.com/xml.php"));
+        QUrlQuery q; q.addQueryItem("id", sid); q.addQueryItem("callsign", call);
+        q.addQueryItem("prg", "Decodius"); url.setQuery(q);
+        QNetworkRequest req(url);
+        req.setHeader(QNetworkRequest::UserAgentHeader, "Decodius/1.8");
+        QNetworkReply* r = m_hudNet->get(req);
+        QTimer::singleShot(12000, r, [r]() { if (r->isRunning()) r->abort(); });
+        connect(r, &QNetworkReply::finished, this, [this, r, call, pick]() {
+            r->deleteLater();
+            const QString xml = QString::fromUtf8(r->readAll());
+            const QString err = pick(xml, QStringLiteral("error"));
+            m_callCard.insert(QStringLiteral("loading"), false);
+            if (!err.isEmpty()) {
+                if (err.contains(QStringLiteral("session"), Qt::CaseInsensitive)) m_hamSession.clear();
+                m_callCard.insert(QStringLiteral("error"), err);
+                emit cardChanged();
+                return;
+            }
+            m_callCard.insert(QStringLiteral("call"), pick(xml, "callsign").isEmpty() ? call : pick(xml, "callsign").toUpper());
+            m_callCard.insert(QStringLiteral("name"),    pick(xml, "adr_name").isEmpty() ? pick(xml, "nick") : pick(xml, "adr_name"));
+            m_callCard.insert(QStringLiteral("qth"),     pick(xml, "qth"));
+            m_callCard.insert(QStringLiteral("city"),    pick(xml, "adr_city"));
+            m_callCard.insert(QStringLiteral("country"), pick(xml, "country"));
+            m_callCard.insert(QStringLiteral("grid"),    pick(xml, "grid").toUpper());
+            m_callCard.insert(QStringLiteral("qsl"),     pick(xml, "qsl"));
+            m_callCard.insert(QStringLiteral("continent"), pick(xml, "continent"));
+            m_callCard.insert(QStringLiteral("itu"),     pick(xml, "itu"));
+            m_callCard.insert(QStringLiteral("cq"),      pick(xml, "cq"));
+            bool okLat = false, okLon = false;
+            const double lat = pick(xml, "latitude").toDouble(&okLat);
+            const double lon = pick(xml, "longitude").toDouble(&okLon);
+            if (okLat && okLon) { m_callCard.insert(QStringLiteral("lat"), lat); m_callCard.insert(QStringLiteral("lon"), lon); }
+            m_callCard.remove(QStringLiteral("error"));
+            emit cardChanged();
+        });
+    };
+
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (!m_hamSession.isEmpty() && (now - m_hamSessionMs) < 3000000) {   // sessione < 50 min
+        doLookup(m_hamSession);
+        return;
+    }
+    // Login per ottenere il session_id.
+    QUrl lurl(QStringLiteral("https://www.hamqth.com/xml.php"));
+    QUrlQuery lq; lq.addQueryItem("u", user); lq.addQueryItem("p", pass); lurl.setQuery(lq);
+    QNetworkRequest lreq(lurl);
+    lreq.setHeader(QNetworkRequest::UserAgentHeader, "Decodius/1.8");
+    QNetworkReply* lr = m_hudNet->get(lreq);
+    QTimer::singleShot(12000, lr, [lr]() { if (lr->isRunning()) lr->abort(); });
+    connect(lr, &QNetworkReply::finished, this, [this, lr, pick, doLookup, now]() {
+        lr->deleteLater();
+        const QString xml = QString::fromUtf8(lr->readAll());
+        const QString sid = pick(xml, QStringLiteral("session_id"));
+        if (sid.isEmpty()) {
+            m_callCard.insert(QStringLiteral("loading"), false);
+            m_callCard.insert(QStringLiteral("error"), QStringLiteral("Accesso HamQTH non riuscito."));
+            emit cardChanged();
+            return;
+        }
+        m_hamSession = sid; m_hamSessionMs = now;
+        doLookup(sid);
+    });
+}
+
 // Espande i nominativi (call) in alfabeto fonetico NATO per la SOLA pronuncia, così
 // "IK0XYZ" viene letto "India Kilo Zero X-ray Yankee Zulu". La chat resta col call.
 QString Assistant::phonetic(const QString& text) {
@@ -706,6 +809,12 @@ void Assistant::sendText(const QString& text) {
         || low == QStringLiteral("ferma tutto") || low == QStringLiteral("basta"))) {
         setAutoPilot(false);
         return;
+    }
+    // Comando: "scheda di <call>" / "mostrami la scheda <call>" -> finestra QRZ con mappa.
+    if (low.contains(QStringLiteral("scheda")) || low.contains(QStringLiteral("qrz di"))) {
+        static const QRegularExpression reCall(QStringLiteral("\\b([A-Z0-9]{1,3}[0-9][A-Z]{1,4})\\b"));
+        const auto mc = reCall.match(t.toUpper());
+        if (mc.hasMatch()) { showCard(mc.captured(1)); return; }
     }
     // Comando: attiva/disattiva le "mani libere" (ascolto continuo con wake-word).
     if (low.contains(QStringLiteral("mani libere")) || low.contains(QStringLiteral("wake word"))

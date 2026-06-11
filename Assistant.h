@@ -45,6 +45,9 @@ class Assistant : public QObject {
     // Wizard cervello: true se all'avvio nessun LLM è configurato/raggiungibile.
     Q_PROPERTY(bool needsBrainSetup READ needsBrainSetup NOTIFY brainChanged)
     Q_PROPERTY(QString brainStatus READ brainStatus NOTIFY brainChanged)
+    // Scheda nominativo (QRZ-like): finestra overlay con mappa + dati HamQTH.
+    Q_PROPERTY(bool cardVisible READ cardVisible NOTIFY cardChanged)
+    Q_PROPERTY(QVariantMap callCard READ callCard NOTIFY cardChanged)
 
 public:
     enum State { Idle, Listening, Thinking, Speaking };
@@ -78,6 +81,10 @@ public:
     Q_INVOKABLE void runBrainSetup();   // lancia il setup automatico (Ollama)
     Q_INVOKABLE void recheckBrain();    // ri-verifica se il cervello è pronto
     Q_INVOKABLE void saveProvider(const QString& baseUrl, const QString& apiKey, const QString& model);
+    bool cardVisible() const { return m_cardVisible; }
+    QVariantMap callCard() const { return m_callCard; }
+    Q_INVOKABLE void showCard(const QString& call);   // recupera HamQTH e mostra la scheda
+    Q_INVOKABLE void hideCard();
 
     Q_INVOKABLE void sendText(const QString& text);
     Q_INVOKABLE void setListening(bool on);   // attiva/disattiva l'ascolto continuo
@@ -101,6 +108,7 @@ signals:
     void stationChanged();
     void rosterChanged();
     void brainChanged();
+    void cardChanged();
     // Inoltrato a QML: uno strumento chiede conferma prima di scrivere.
     void confirmationRequested(const QString& title, const QString& detail);
 
@@ -138,6 +146,13 @@ private:
     void checkBrain();              // verifica se un LLM è configurato/raggiungibile
     bool    m_needsBrainSetup = false;
     QString m_brainStatus = QStringLiteral("verifica…");
+
+    // Scheda nominativo (HamQTH).
+    void hamLookup(const QString& call);   // login (se serve) + lookup + parse
+    bool    m_cardVisible = false;
+    QVariantMap m_callCard;
+    QString m_hamSession;           // session_id HamQTH riusato finché valido
+    qint64  m_hamSessionMs = 0;     // epoch ms dell'ultimo login
 
     // ── Pilota automatico (Fase 3): tick periodico che fa "ragionare e agire" l'LLM
     // sulla banda usando i suoi tool (decodium, dxcluster, memoria, comandi). ──

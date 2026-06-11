@@ -933,4 +933,74 @@ Window {
             }
         }
     }
+
+    // ───────── SCHEDA NOMINATIVO (QRZ-like) — overlay con mappa + dati HamQTH ─────────
+    Rectangle {
+        id: cardOverlay
+        anchors.fill: parent
+        visible: assistant.cardVisible
+        opacity: assistant.cardVisible ? 1 : 0
+        Behavior on opacity { NumberAnimation { duration: 180 } }
+        color: Qt.rgba(0, 0, 0, 0.55)
+        z: 100
+        MouseArea { anchors.fill: parent; onClicked: assistant.hideCard() }   // clic fuori = chiudi
+
+        Rectangle {
+            id: cardBox
+            anchors.centerIn: parent
+            width: Math.min(parent.width - 60, 540); height: 430
+            radius: 16
+            color: Qt.rgba(0.04, 0.09, 0.13, 0.97)
+            border.color: root.accent; border.width: 1
+            MouseArea { anchors.fill: parent }   // assorbe i clic dentro la card
+            readonly property var c: assistant.callCard
+
+            Column {
+                anchors.fill: parent; anchors.margins: 16; spacing: 10
+
+                Row {
+                    width: parent.width
+                    Text { text: cardBox.c.call || "—"; color: root.accent; font.bold: true
+                           font.pixelSize: 26; font.family: "Consolas"; font.letterSpacing: 2 }
+                    Item { width: parent.width - 200; height: 1 }
+                    Rectangle { width: 26; height: 26; radius: 13; color: cl.containsMouse ? "#ff5d72" : "#1a2a36"
+                        Text { anchors.centerIn: parent; text: "✕"; color: "#cfe9f2"; font.pixelSize: 13 }
+                        MouseArea { id: cl; anchors.fill: parent; hoverEnabled: true; onClicked: assistant.hideCard() } }
+                }
+
+                Text { visible: cardBox.c.loading === true; text: "Caricamento da HamQTH…"
+                       color: "#9fc0cf"; font.pixelSize: 13 }
+                Text { visible: cardBox.c.error !== undefined; text: "⚠ " + (cardBox.c.error || "")
+                       color: "#ffb02e"; font.pixelSize: 13; wrapMode: Text.WordWrap; width: parent.width }
+
+                Rectangle {
+                    width: parent.width; height: 180; radius: 8; clip: true; color: "#06121b"
+                    visible: cardBox.c.loading !== true && cardBox.c.error === undefined
+                    Image { id: cardMap; anchors.fill: parent; source: "world.png"; fillMode: Image.Stretch; opacity: 0.9 }
+                    Rectangle {
+                        visible: cardBox.c.lat !== undefined
+                        width: 12; height: 12; radius: 6
+                        x: cardMap.width  * ((cardBox.c.lon || 0) + 180) / 360 - 6
+                        y: cardMap.height * (90 - (cardBox.c.lat || 0)) / 180 - 6
+                        color: "#ff4a6a"; border.color: "#ffffff"; border.width: 1
+                        SequentialAnimation on scale { loops: Animation.Infinite
+                            NumberAnimation { to: 1.5; duration: 700 } NumberAnimation { to: 1.0; duration: 700 } }
+                    }
+                }
+
+                Grid {
+                    width: parent.width; columns: 2; rowSpacing: 5; columnSpacing: 12
+                    visible: cardBox.c.loading !== true && cardBox.c.error === undefined
+                    Text { text: "👤 " + (cardBox.c.name || "—"); color: "#eaf6fb"; font.pixelSize: 13; width: 250; elide: Text.ElideRight }
+                    Text { text: "🌍 " + (cardBox.c.country || "—"); color: "#eaf6fb"; font.pixelSize: 13 }
+                    Text { text: "🏙 " + (cardBox.c.qth || cardBox.c.city || "—"); color: "#cfe6f0"; font.pixelSize: 12; width: 250; elide: Text.ElideRight }
+                    Text { text: "📍 " + (cardBox.c.grid || "—"); color: "#cfe6f0"; font.pixelSize: 12; font.family: "Consolas" }
+                    Text { text: "✉ QSL: " + (cardBox.c.qsl || "—"); color: "#7fb3c8"; font.pixelSize: 11; width: 250; elide: Text.ElideRight }
+                    Text { text: "ITU " + (cardBox.c.itu || "-") + " · CQ " + (cardBox.c.cq || "-"); color: "#7fb3c8"; font.pixelSize: 11 }
+                }
+                Text { text: "dati: HamQTH.com"; color: "#4d6b78"; font.pixelSize: 9
+                       visible: cardBox.c.loading !== true && cardBox.c.error === undefined }
+            }
+        }
+    }
 }
