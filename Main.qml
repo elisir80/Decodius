@@ -642,22 +642,50 @@ Window {
     // ───────── CALL ROSTER laterale (stazioni in banda, live da Decodium) ─────────
     Rectangle {
         id: rosterPanel
-        width: 320
+        width: 320; height: 470
         property bool mapView: false              // false=lista, true=mappa
-        anchors.top: parent.top; anchors.bottom: parent.bottom; anchors.right: parent.right
-        x: root.rosterOpen ? 0 : width            // scivola da destra
-        color: Qt.rgba(0.03, 0.08, 0.11, 0.92)
-        border.color: Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.35); border.width: 1
-        Behavior on x { NumberAnimation { duration: 260; easing.type: Easing.OutCubic } }
+        x: parent.width - width - 20              // posizione iniziale (il drag la sovrascrive)
+        y: 70
+        visible: root.rosterOpen
+        opacity: root.rosterOpen ? 1 : 0
+        Behavior on opacity { NumberAnimation { duration: 200 } }
+        color: Qt.rgba(0.03, 0.08, 0.11, 0.95)
+        radius: 10
+        border.color: Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.45); border.width: 1
         z: 50
 
+        // ── Barra titolo TRASCINABILE ──
+        Rectangle {
+            id: rosterTitleBar
+            width: parent.width; height: 28
+            anchors.top: parent.top
+            radius: 10
+            color: Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.16)
+            MouseArea {
+                anchors.fill: parent
+                cursorShape: Qt.SizeAllCursor
+                drag.target: rosterPanel
+                drag.axis: Drag.XAndYAxis
+                drag.minimumX: 0; drag.maximumX: root.width - rosterPanel.width
+                drag.minimumY: 0; drag.maximumY: root.height - rosterPanel.height
+            }
+            Text { anchors.left: parent.left; anchors.leftMargin: 10; anchors.verticalCenter: parent.verticalCenter
+                   text: "⠿  CALL ROSTER"; color: root.accent; font.bold: true
+                   font.pixelSize: 12; font.letterSpacing: 1 }
+            Rectangle {
+                anchors.right: parent.right; anchors.rightMargin: 6; anchors.verticalCenter: parent.verticalCenter
+                width: 20; height: 20; radius: 10; color: closeMouse.containsMouse ? "#ff5d72" : "transparent"
+                Text { anchors.centerIn: parent; text: "✕"; color: "#cfe9f2"; font.pixelSize: 12 }
+                MouseArea { id: closeMouse; anchors.fill: parent; hoverEnabled: true
+                            onClicked: root.rosterOpen = false }
+            }
+        }
+
         Column {
-            anchors.fill: parent; anchors.margins: 12; spacing: 8
+            anchors.fill: parent; anchors.topMargin: 36; anchors.margins: 12; spacing: 8
             Row {
                 width: parent.width; spacing: 6
-                Text { text: "📋 ROSTER"; color: root.accent; font.bold: true
-                       font.pixelSize: 13; font.letterSpacing: 1; anchors.verticalCenter: parent.verticalCenter }
-                Item { width: parent.width - 230; height: 1 }
+                Item { width: parent.width - 110; height: 1 }
                 // toggle Lista / Mappa
                 Rectangle { width: 44; height: 22; radius: 11
                     color: !rosterPanel.mapView ? root.accent : Qt.rgba(1,1,1,0.06)
