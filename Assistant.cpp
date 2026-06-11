@@ -707,16 +707,6 @@ void Assistant::sendText(const QString& text) {
         setAutoPilot(false);
         return;
     }
-    // Comando: cambia motore voce (cloud / locale / clonata).
-    if (low.contains(QStringLiteral("voce")) &&
-        (low.contains(QStringLiteral("locale")) || low.contains(QStringLiteral("cloud"))
-         || low.contains(QStringLiteral("clonata")) || low.contains(QStringLiteral("clone"))
-         || low.contains(QStringLiteral("la tua voce")))) {
-        if (low.contains(QStringLiteral("locale"))) setVoiceEngine(QStringLiteral("piper"));
-        else if (low.contains(QStringLiteral("cloud"))) setVoiceEngine(QStringLiteral("edge"));
-        else setVoiceEngine(QStringLiteral("clone"));   // clonata / la tua voce
-        return;
-    }
     // Comando: attiva/disattiva le "mani libere" (ascolto continuo con wake-word).
     if (low.contains(QStringLiteral("mani libere")) || low.contains(QStringLiteral("wake word"))
         || low.contains(QStringLiteral("parola di attivazione"))) {

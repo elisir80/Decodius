@@ -1443,10 +1443,22 @@ void OllamaClient::runDecodiumCommand(const QJsonObject& args, std::function<voi
     const QString token = s.value(QStringLiteral("RemoteToken")).toString().trimmed();
 
     const QString cmd = args.value("comando").toString().toLower().trimmed();
-    const bool attivo = args.value("attivo").toBool();
+    // 'attivo' può arrivare come bool oppure come stringa ("true"/"True"/"on"/"1").
+    const QJsonValue av = args.value("attivo");
+    const bool attivo = av.isBool() ? av.toBool()
+        : (av.isString() && (av.toString().compare(QStringLiteral("true"), Qt::CaseInsensitive) == 0
+                             || av.toString() == QStringLiteral("1")
+                             || av.toString().compare(QStringLiteral("on"), Qt::CaseInsensitive) == 0));
+    // Stringa pulita: ignora i segnaposto "None"/"null" che alcuni modelli inseriscono.
+    auto argStr = [&args](const QString& k) {
+        QString v = args.value(k).toString().trimmed();
+        if (v.compare(QStringLiteral("None"), Qt::CaseInsensitive) == 0
+            || v.compare(QStringLiteral("null"), Qt::CaseInsensitive) == 0) return QString();
+        return v;
+    };
     QJsonObject body;
-    if (cmd == "modo")          body = {{"type","set_mode"},{"mode", args.value("valore").toString().toUpper()}};
-    else if (cmd == "banda")    body = {{"type","set_band"},{"band", args.value("valore").toString()}};
+    if (cmd == "modo")          body = {{"type","set_mode"},{"mode", argStr("valore").toUpper()}};
+    else if (cmd == "banda")    body = {{"type","set_band"},{"band", argStr("valore")}};
     else if (cmd == "dial")     body = {{"type","set_dial_frequency"},{"dial_frequency_hz", (qint64)argNum(args,"hz")}};
     else if (cmd == "rx")       body = {{"type","set_rx_frequency"},{"rx_frequency_hz", (int)argNum(args,"hz")}};
     else if (cmd == "tx")       body = {{"type","set_tx_frequency"},{"tx_frequency_hz", (int)argNum(args,"hz")}};
@@ -1455,8 +1467,8 @@ void OllamaClient::runDecodiumCommand(const QJsonObject& args, std::function<voi
     else if (cmd == "autospot") body = {{"type","set_auto_spot"},{"enabled", attivo}};
     else if (cmd == "quickqso") body = {{"type","set_quick_qso"},{"enabled", attivo}};
     else if (cmd == "rispondi") body = {{"type","select_caller"},
-                                        {"target_call", args.value("call").toString().toUpper()},
-                                        {"target_grid", args.value("grid").toString().toUpper()}};
+                                        {"target_call", argStr("call").toUpper()},
+                                        {"target_grid", argStr("grid").toUpper()}};
     else if (cmd == "tx_on")    body = {{"type","set_tx_enabled"},{"enabled", true}};
     else if (cmd == "tx_off")   body = {{"type","set_tx_enabled"},{"enabled", false}};
     else { done(QStringLiteral("Comando Decodium sconosciuto: %1").arg(cmd)); return; }
