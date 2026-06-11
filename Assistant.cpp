@@ -21,6 +21,7 @@
 #include <QHash>
 #include <QSet>
 #include <QList>
+#include <QProcess>
 
 static const char* kSystemPrompt =
     "Ti chiami Decodius. Sei l'assistente personale di Martino, radioamatore (IU8LMC) "
@@ -58,6 +59,9 @@ Assistant::Assistant(QObject* parent) : QObject(parent) {
     connect(&m_hudTimer, &QTimer::timeout, this, &Assistant::onHudTick);
     m_hudTimer.start();
     QTimer::singleShot(800, this, [this]() { onHudTick(); });
+
+    // Wizard cervello: verifica all'avvio se un LLM è pronto, altrimenti guida l'utente.
+    QTimer::singleShot(1500, this, [this]() { checkBrain(); });
 
     // Briefing vocale all'avvio: saluto + stato stazione (dopo che voce/HUD sono pronti).
     QTimer::singleShot(6000, this, [this]() {
@@ -484,6 +488,59 @@ void Assistant::fetchRoster() {
         m_callRoster = roster;
         emit rosterChanged();
     });
+}
+
+// Verifica se un "cervello" è pronto: provider cloud configurato oppure Ollama attivo.
+void Assistant::checkBrain() {
+    const QString appDir = QCoreApplication::applicationDirPath();
+    if (QFileInfo::exists(appDir + QStringLiteral("/decodius_provider.txt"))) {
+        m_needsBrainSetup = false;
+        m_brainStatus = QStringLiteral("Provider cloud configurato.");
+        emit brainChanged();
+        return;
+    }
+    QNetworkReply* r = m_hudNet->get(QNetworkRequest(QUrl(QStringLiteral("http://localhost:11434/api/tags"))));
+    QTimer::singleShot(3000, r, [r]() { if (r->isRunning()) r->abort(); });
+    connect(r, &QNetworkReply::finished, this, [this, r]() {
+        r->deleteLater();
+        const bool ok = (r->error() == QNetworkReply::NoError);
+        m_needsBrainSetup = !ok;
+        m_brainStatus = ok ? QStringLiteral("Ollama attivo.")
+                           : QStringLiteral("Nessun cervello rilevato.");
+        emit brainChanged();
+    });
+}
+
+void Assistant::recheckBrain() {
+    m_brainStatus = QStringLiteral("Verifica in corso…");
+    emit brainChanged();
+    checkBrain();
+}
+
+// Lancia il setup automatico del cervello (installa Ollama + signin + modello).
+void Assistant::runBrainSetup() {
+    const QString script = QCoreApplication::applicationDirPath() + QStringLiteral("/setup_cervello.ps1");
+    QProcess::startDetached(QStringLiteral("powershell.exe"),
+        {QStringLiteral("-ExecutionPolicy"), QStringLiteral("Bypass"),
+         QStringLiteral("-File"), script});
+    m_brainStatus = QStringLiteral("Setup avviato in una finestra a parte…");
+    emit brainChanged();
+}
+
+// Salva un provider cloud OpenAI-compatibile (richiede riavvio per applicarlo).
+void Assistant::saveProvider(const QString& baseUrl, const QString& apiKey, const QString& model) {
+    if (baseUrl.trimmed().isEmpty() || apiKey.trimmed().isEmpty()) return;
+    QFile f(QCoreApplication::applicationDirPath() + QStringLiteral("/decodius_provider.txt"));
+    if (f.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        const QString m = model.trimmed().isEmpty() ? QStringLiteral("meta/llama-3.1-8b-instruct")
+                                                     : model.trimmed();
+        f.write((QStringLiteral("base_url=") + baseUrl.trimmed() + QStringLiteral("\napi_key=")
+                 + apiKey.trimmed() + QStringLiteral("\nmodel=") + m + QStringLiteral("\n")).toUtf8());
+        f.close();
+        m_needsBrainSetup = false;
+        m_brainStatus = QStringLiteral("Provider salvato — riavvia Decodius per attivarlo.");
+        emit brainChanged();
+    }
 }
 
 // Espande i nominativi (call) in alfabeto fonetico NATO per la SOLA pronuncia, così

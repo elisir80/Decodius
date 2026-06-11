@@ -42,6 +42,9 @@ class Assistant : public QObject {
     Q_PROPERTY(QString stationLine2 READ stationLine2 NOTIFY stationChanged)  // attività · TX/decodifiche
     // Call Roster dinamico: stazioni decodificate ora in banda (da Decodium).
     Q_PROPERTY(QVariantList callRoster READ callRoster NOTIFY rosterChanged)
+    // Wizard cervello: true se all'avvio nessun LLM è configurato/raggiungibile.
+    Q_PROPERTY(bool needsBrainSetup READ needsBrainSetup NOTIFY brainChanged)
+    Q_PROPERTY(QString brainStatus READ brainStatus NOTIFY brainChanged)
 
 public:
     enum State { Idle, Listening, Thinking, Speaking };
@@ -70,6 +73,11 @@ public:
     QString stationLine1() const { return m_stationLine1; }
     QString stationLine2() const { return m_stationLine2; }
     QVariantList callRoster() const { return m_callRoster; }
+    bool needsBrainSetup() const { return m_needsBrainSetup; }
+    QString brainStatus() const { return m_brainStatus; }
+    Q_INVOKABLE void runBrainSetup();   // lancia il setup automatico (Ollama)
+    Q_INVOKABLE void recheckBrain();    // ri-verifica se il cervello è pronto
+    Q_INVOKABLE void saveProvider(const QString& baseUrl, const QString& apiKey, const QString& model);
 
     Q_INVOKABLE void sendText(const QString& text);
     Q_INVOKABLE void setListening(bool on);   // attiva/disattiva l'ascolto continuo
@@ -92,6 +100,7 @@ signals:
     void voiceEngineChanged();
     void stationChanged();
     void rosterChanged();
+    void brainChanged();
     // Inoltrato a QML: uno strumento chiede conferma prima di scrivere.
     void confirmationRequested(const QString& title, const QString& detail);
 
@@ -124,6 +133,11 @@ private:
     bool    m_stationOnline = false;
     QString m_stationLine1, m_stationLine2;
     QVariantList m_callRoster;
+
+    // Wizard cervello.
+    void checkBrain();              // verifica se un LLM è configurato/raggiungibile
+    bool    m_needsBrainSetup = false;
+    QString m_brainStatus = QStringLiteral("verifica…");
 
     // ── Pilota automatico (Fase 3): tick periodico che fa "ragionare e agire" l'LLM
     // sulla banda usando i suoi tool (decodium, dxcluster, memoria, comandi). ──

@@ -862,4 +862,83 @@ Window {
             showWelcome()
         }
     }
+
+    // ───────── Wizard: scelta e attivazione del "cervello" (LLM) ─────────
+    Connections {
+        target: assistant
+        function onBrainChanged() {
+            if (assistant.needsBrainSetup && !assistant.needsCallSign
+                    && !callDialog.visible && !brainDialog.visible)
+                brainDialog.open()
+        }
+    }
+    Dialog {
+        id: brainDialog; modal: true; anchors.centerIn: parent
+        width: Math.min(root.width - 80, 560); padding: 22
+        closePolicy: Popup.NoAutoClose
+        background: Rectangle { radius: 16; color: "#0c141d"; border.color: root.accent; border.width: 1 }
+        contentItem: ColumnLayout {
+            spacing: 12
+            Text { text: "🧠 Scegli il cervello di Decodius"; color: "#eaf6fb"; font.bold: true; font.pixelSize: 19 }
+            Text { text: "Decodius ha bisogno di un modello AI per ragionare. Stato attuale: " + assistant.brainStatus
+                   color: "#9fc0cf"; font.pixelSize: 12; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+
+            // Opzione 1 — Ollama (setup automatico)
+            Rectangle { Layout.fillWidth: true; radius: 10; color: Qt.rgba(1,1,1,0.04)
+                border.color: Qt.rgba(root.accent.r,root.accent.g,root.accent.b,0.35); border.width: 1
+                implicitHeight: o1.implicitHeight + 20
+                ColumnLayout { id: o1; anchors.fill: parent; anchors.margins: 12; spacing: 6
+                    Text { text: "1 ·  Ollama + gpt-oss:120b  (consigliato, automatico)"; color: root.accent; font.bold: true; font.pixelSize: 13 }
+                    Text { text: "Installa Ollama, ti fa accedere con un clic e prepara il modello. Serve internet e un account Ollama gratuito."
+                           color: "#9fc0cf"; font.pixelSize: 11; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+                    Button { text: "⚙  Avvia setup automatico"; onClicked: assistant.runBrainSetup()
+                        background: Rectangle { radius: 9; color: root.accent }
+                        contentItem: Text { text: parent.text; color: "#04121a"; font.bold: true; font.pixelSize: 12
+                            horizontalAlignment: Text.AlignHCenter; padding: 6 } }
+                }
+            }
+
+            // Opzione 2 — Provider cloud (form)
+            Rectangle { Layout.fillWidth: true; radius: 10; color: Qt.rgba(1,1,1,0.04)
+                border.color: Qt.rgba(root.accent.r,root.accent.g,root.accent.b,0.35); border.width: 1
+                implicitHeight: o2.implicitHeight + 20
+                ColumnLayout { id: o2; anchors.fill: parent; anchors.margins: 12; spacing: 6
+                    Text { text: "2 ·  Provider cloud  (NVIDIA / OpenRouter / DeepSeek / Gemini)"; color: root.accent; font.bold: true; font.pixelSize: 13 }
+                    Text { text: "Crea una chiave gratuita (es. build.nvidia.com), incollala qui e salva."
+                           color: "#9fc0cf"; font.pixelSize: 11; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+                    TextField { id: provUrl; Layout.fillWidth: true; color: "#eaf6fb"; font.pixelSize: 12
+                        text: "https://integrate.api.nvidia.com/v1"; placeholderText: "base_url"
+                        background: Rectangle { radius: 8; color: "#0a131c"; border.color: Qt.rgba(1,1,1,0.15); border.width: 1 } }
+                    TextField { id: provKey; Layout.fillWidth: true; color: "#eaf6fb"; font.pixelSize: 12
+                        placeholderText: "api_key (es. nvapi-...)"; echoMode: TextInput.PasswordEchoOnEdit
+                        background: Rectangle { radius: 8; color: "#0a131c"; border.color: Qt.rgba(1,1,1,0.15); border.width: 1 } }
+                    TextField { id: provModel; Layout.fillWidth: true; color: "#eaf6fb"; font.pixelSize: 12
+                        text: "meta/llama-3.1-8b-instruct"; placeholderText: "model"
+                        background: Rectangle { radius: 8; color: "#0a131c"; border.color: Qt.rgba(1,1,1,0.15); border.width: 1 } }
+                    Button { text: "💾  Salva provider"; enabled: provKey.text.trim().length > 8
+                        onClicked: { assistant.saveProvider(provUrl.text, provKey.text, provModel.text); brainDialog.close() }
+                        background: Rectangle { radius: 9; opacity: parent.enabled?1:0.4; color: root.accent }
+                        contentItem: Text { text: parent.text; color: "#04121a"; font.bold: true; font.pixelSize: 12
+                            horizontalAlignment: Text.AlignHCenter; padding: 6 } }
+                }
+            }
+
+            // Opzione 3 — locale (istruzioni)
+            Text { text: "3 ·  Modello locale (offline): installa Ollama, poi nel prompt:  ollama pull qwen2.5:7b  e scrivi 'qwen2.5:7b' in decodius_model.txt."
+                   color: "#7fb3c8"; font.pixelSize: 11; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+
+            RowLayout {
+                Layout.fillWidth: true; spacing: 10
+                Button { text: "↻ Ricontrolla"; onClicked: assistant.recheckBrain()
+                    background: Rectangle { radius: 9; color: "#1a2a36"; border.color: root.accent; border.width: 1 }
+                    contentItem: Text { text: parent.text; color: root.accent; font.pixelSize: 12; padding: 6
+                        horizontalAlignment: Text.AlignHCenter } }
+                Item { Layout.fillWidth: true }
+                Button { text: "Chiudi"; onClicked: brainDialog.close()
+                    background: Rectangle { radius: 9; color: "#1a2a36" }
+                    contentItem: Text { text: parent.text; color: "#9fc0cf"; font.pixelSize: 12; padding: 6
+                        horizontalAlignment: Text.AlignHCenter } }
+            }
+        }
+    }
 }
