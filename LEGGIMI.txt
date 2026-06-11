@@ -3,8 +3,16 @@ DECODIUS — Assistente vocale radioamatoriale
 
 GRAZIE per aver installato Decodius!
 
-NOVITA' 1.7 ALPHA
+NOVITA' 1.8 ALPHA
 -----------------
+- Wizard del cervello al primo avvio: ti guida a scegliere e attivare l'LLM.
+- Call Roster laterale trascinabile con MAPPA geografica delle stazioni.
+- Nominativi in alfabeto fonetico NATO; numero versione mostrato nell'app.
+- Fix: comandi alla radio (toggle on/off), lingua sempre italiana, DX cluster.
+- Voce: solo cloud (Giuseppe) con 4 voci selezionabili e multilingua.
+
+NOVITA' precedenti
+------------------
 - Memoria persistente: Decodius ricorda QSO, stazioni e tue preferenze.
 - Conoscenza live: DX Cluster mondiale + propagazione avanzata.
 - Pilota automatico (pulsante 🤖): opera la stazione in autonomia.
