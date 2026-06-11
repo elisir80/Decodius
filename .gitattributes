@@ -1,0 +1,3 @@
+# Forza fine-riga LF per gli script (necessario su Linux/Raspberry Pi).
+*.sh text eol=lf
+*.py text eol=lf

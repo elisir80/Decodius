@@ -6,6 +6,16 @@ le chiamate HTTP. Whisper STT locale è opzionale (lento su ARM); voce e cervell
 
 > Consigliato: **Pi 4 (4–8 GB) o Pi 5**, Raspberry Pi OS **64-bit (Bookworm)**, scheda ≥16 GB.
 
+## ⚡ Setup rapido (automatico)
+```bash
+git clone https://github.com/iu8lmc/Decodius.git
+cd Decodius
+chmod +x setup_pi.sh && ./setup_pi.sh
+```
+Lo script installa le dipendenze, compila, copia i file di runtime, ti guida nella
+configurazione (cervello NVIDIA, Decodium via IP, HamQTH) e, se vuoi, crea l'autostart
+kiosk. Le sezioni sotto restano come riferimento manuale.
+
 ---
 
 ## 1. Dipendenze
