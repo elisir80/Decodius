@@ -23,6 +23,7 @@
 #include <QList>
 #include <QProcess>
 #include <QUrlQuery>
+#include "DecodiumConfig.h"
 
 static const char* kSystemPrompt =
     "Ti chiami Decodius. Sei l'assistente personale di Martino, radioamatore (IU8LMC) "
@@ -224,6 +225,13 @@ Assistant::Assistant(QObject* parent) : QObject(parent) {
     if (!QFileInfo::exists(epy)) epy = appDir + QStringLiteral("/pyedge/python.exe");
     if (!QFileInfo::exists(epy)) epy = QStringLiteral("C:/Python314/pythonw.exe");
     if (!QFileInfo::exists(epy)) epy = QStringLiteral("C:/Python314/python.exe");
+#ifndef Q_OS_WIN
+    // Linux/Raspberry Pi: usa il venv portatile se presente, altrimenti python3 di sistema
+    // (con edge-tts installato: pip install edge-tts).
+    if (!QFileInfo::exists(epy)) epy = appDir + QStringLiteral("/pyedge/bin/python3");
+    if (!QFileInfo::exists(epy)) epy = QStringLiteral("/usr/bin/python3");
+    if (!QFileInfo::exists(epy)) epy = QStringLiteral("python3");
+#endif
     m_xtts = new XttsTts(epy,
                          ebase + QStringLiteral("/edge_server.py"),
                          QStringLiteral("it-IT-GiuseppeNeural"),
@@ -403,9 +411,8 @@ static QString bandFromHz(double hz) {
 
 // Un ciclo dell'HUD: legge /api/state di Decodium 4 e aggiorna le righe di stato.
 void Assistant::onHudTick() {
-    const QString token = QSettings(QStringLiteral("Decodium"), QStringLiteral("Decodium3"))
-                              .value(QStringLiteral("WebServerAccessToken")).toString().trimmed();
-    QUrl url(QStringLiteral("http://127.0.0.1:8080/api/state?token=") + token);
+    const DecodiumConfig cfg = loadDecodiumConfig();
+    QUrl url(cfg.webBase() + QStringLiteral("/api/state?token=") + cfg.webToken);
     QNetworkReply* r = m_hudNet->get(QNetworkRequest(url));
     QTimer::singleShot(2500, r, [r]() { if (r->isRunning()) r->abort(); });
     connect(r, &QNetworkReply::finished, this, [this, r]() {
@@ -449,9 +456,8 @@ static bool gridToLatLon(const QString& g, double& lat, double& lon) {
 
 // Legge /api/decodes di Decodium e costruisce il call roster (stazioni in banda ora).
 void Assistant::fetchRoster() {
-    const QString token = QSettings(QStringLiteral("Decodium"), QStringLiteral("Decodium3"))
-                              .value(QStringLiteral("WebServerAccessToken")).toString().trimmed();
-    QUrl url(QStringLiteral("http://127.0.0.1:8080/api/decodes?token=") + token);
+    const DecodiumConfig cfg = loadDecodiumConfig();
+    QUrl url(cfg.webBase() + QStringLiteral("/api/decodes?token=") + cfg.webToken);
     QNetworkReply* r = m_hudNet->get(QNetworkRequest(url));
     QTimer::singleShot(2500, r, [r]() { if (r->isRunning()) r->abort(); });
     connect(r, &QNetworkReply::finished, this, [this, r]() {

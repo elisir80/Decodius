@@ -1,5 +1,6 @@
 // OllamaClient.cpp
 #include "OllamaClient.h"
+#include "DecodiumConfig.h"
 #include <QNetworkRequest>
 #include <QNetworkReply>
 #include <QJsonDocument>
@@ -1376,13 +1377,13 @@ void OllamaClient::runDxCluster(const QJsonObject& args, std::function<void(QStr
 // Stato in tempo reale del decoder Decodium 4 via la sua API locale (porta 8080,
 // token da QSettings Decodium/Decodium3). Legge /api/state poi /api/decodes.
 void OllamaClient::runDecodium(std::function<void(QString)> done) {
-    QSettings s(QStringLiteral("Decodium"), QStringLiteral("Decodium3"));
-    const QString tok = s.value(QStringLiteral("WebServerAccessToken")).toString().trimmed();
+    const DecodiumConfig cfg = loadDecodiumConfig();
+    const QString tok = cfg.webToken;
     if (tok.isEmpty()) {
         done(QStringLiteral("Decodium non risulta configurato: apri Decodium e attiva il web server (porta 8080)."));
         return;
     }
-    const QString base = QStringLiteral("http://127.0.0.1:8080/api/");
+    const QString base = cfg.webBase() + QStringLiteral("/api/");
     QNetworkReply* sr = m_net.get(QNetworkRequest(QUrl(base + QStringLiteral("state?token=") + tok)));
     QTimer::singleShot(6000, sr, [sr]() { if (sr->isRunning()) sr->abort(); });
     connect(sr, &QNetworkReply::finished, this, [this, sr, base, tok, done]() {
@@ -1436,11 +1437,10 @@ void OllamaClient::runDecodium(std::function<void(QString)> done) {
 
 // Comanda Decodium 4 via POST /api/v1/commands (RemoteCommandServer, loopback).
 void OllamaClient::runDecodiumCommand(const QJsonObject& args, std::function<void(QString)> done) {
-    QSettings s(QStringLiteral("Decodium"), QStringLiteral("Decodium3"));
-    int port = s.value(QStringLiteral("RemoteHttpPort"), 19091).toInt();
-    if (port <= 0) port = 19091;
-    const QString user = s.value(QStringLiteral("RemoteUser"), QStringLiteral("admin")).toString();
-    const QString token = s.value(QStringLiteral("RemoteToken")).toString().trimmed();
+    const DecodiumConfig cfg = loadDecodiumConfig();
+    const int port = cfg.cmdPort > 0 ? cfg.cmdPort : 19091;
+    const QString user = cfg.cmdUser;
+    const QString token = cfg.cmdToken;
 
     const QString cmd = args.value("comando").toString().toLower().trimmed();
     // 'attivo' può arrivare come bool oppure come stringa ("true"/"True"/"on"/"1").
@@ -1477,7 +1477,7 @@ void OllamaClient::runDecodiumCommand(const QJsonObject& args, std::function<voi
     body["command_id"] = QStringLiteral("decodius-%1").arg(nowMs);
     body["client_sent_ms"] = (double)nowMs;
 
-    QNetworkRequest req{ QUrl(QStringLiteral("http://127.0.0.1:%1/api/v1/commands").arg(port)) };
+    QNetworkRequest req{ QUrl(cfg.cmdBase() + QStringLiteral("/api/v1/commands")) };
     req.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
     req.setRawHeader("X-Auth-User", user.toUtf8());
     if (!token.isEmpty()) req.setRawHeader("Authorization", ("Bearer " + token).toUtf8());

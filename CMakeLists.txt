@@ -21,6 +21,7 @@ qt_add_executable(decodius
     PiperTts.cpp
     XttsTts.cpp
     WhisperStt.cpp
+    DecodiumConfig.cpp
 )
 
 qt_add_qml_module(decodius
