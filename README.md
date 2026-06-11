@@ -64,6 +64,24 @@ C:\Qt\6.8.0\msvc2022_64\bin\windeployqt.exe --qmldir . build\decodius.exe
 
 ---
 
+## 🍓 Gira anche su Raspberry Pi (Linux ARM)
+
+Decodius è Qt6/QML standard: gira su **Raspberry Pi 4/5** con Raspberry Pi OS 64-bit.
+Il cervello (LLM) è in cloud, quindi al Pi servono solo le chiamate HTTP.
+
+**Setup automatico** (dipendenze + build + configurazione + kiosk):
+```bash
+git clone https://github.com/iu8lmc/Decodius.git
+cd Decodius
+chmod +x setup_pi.sh && ./setup_pi.sh
+```
+
+Su Linux la configurazione di Decodium si mette in `decodius_decodium.txt` (host/IP,
+porte, token) invece del registro di Windows — Decodium gira tipicamente su un PC
+della LAN. Guida completa: **[BUILD_RASPBERRY.md](BUILD_RASPBERRY.md)**.
+
+---
+
 ## Avvio
 
 1. Installa **Ollama** (https://ollama.com) e scegli il modello in `decodius_model.txt`
