@@ -3,6 +3,12 @@ DECODIUS — Assistente vocale radioamatoriale
 
 GRAZIE per aver installato Decodius!
 
+NOVITA' 1.10 ALPHA
+------------------
+- Trasmissione CW: "chiama CQ a 14035 col mio call in CW" -> Decodius fa
+  trasmettere il Morse al keyer della radio (richiede Decodium con il
+  supporto send_cw e la radio in modo CW).
+
 NOVITA' 1.9 ALPHA
 -----------------
 - Scheda nominativo (QRZ): "mostrami la scheda di <call>" -> finestra con

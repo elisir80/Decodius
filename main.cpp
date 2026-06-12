@@ -8,7 +8,7 @@
 int main(int argc, char* argv[]) {
     QGuiApplication app(argc, argv);
     app.setApplicationName("Decodius");
-    app.setApplicationVersion("1.9 Alpha");   // mostrata nella UI (Qt.application.version)
+    app.setApplicationVersion("1.10 Alpha");   // mostrata nella UI (Qt.application.version)
     app.setOrganizationName("Decodius");
     // Icona di finestra/taskbar (l'icona del file .exe arriva dalla risorsa .rc).
     const QString iconPath = app.applicationDirPath() + QStringLiteral("/decodius.ico");
