@@ -58,3 +58,14 @@ if (WIN32)
     enable_language(RC)
     target_sources(decodius PRIVATE decodius.rc)
 endif()
+
+# Su macOS (Apple Silicon/Intel): bundle .app GUI.
+if (APPLE)
+    set_target_properties(decodius PROPERTIES
+        MACOSX_BUNDLE TRUE
+        MACOSX_BUNDLE_BUNDLE_NAME "Decodius"
+        MACOSX_BUNDLE_GUI_IDENTIFIER "com.iu8lmc.decodius"
+        MACOSX_BUNDLE_BUNDLE_VERSION "1.10"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "1.10"
+    )
+endif()

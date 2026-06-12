@@ -226,9 +226,11 @@ Assistant::Assistant(QObject* parent) : QObject(parent) {
     if (!QFileInfo::exists(epy)) epy = QStringLiteral("C:/Python314/pythonw.exe");
     if (!QFileInfo::exists(epy)) epy = QStringLiteral("C:/Python314/python.exe");
 #ifndef Q_OS_WIN
-    // Linux/Raspberry Pi: usa il venv portatile se presente, altrimenti python3 di sistema
-    // (con edge-tts installato: pip install edge-tts).
+    // Linux/Raspberry Pi/macOS: usa il venv portatile se presente, altrimenti python3
+    // di sistema (con edge-tts installato: pip install edge-tts).
     if (!QFileInfo::exists(epy)) epy = appDir + QStringLiteral("/pyedge/bin/python3");
+    if (!QFileInfo::exists(epy)) epy = QStringLiteral("/opt/homebrew/bin/python3"); // macOS Apple Silicon
+    if (!QFileInfo::exists(epy)) epy = QStringLiteral("/usr/local/bin/python3");     // macOS Intel / Homebrew
     if (!QFileInfo::exists(epy)) epy = QStringLiteral("/usr/bin/python3");
     if (!QFileInfo::exists(epy)) epy = QStringLiteral("python3");
 #endif

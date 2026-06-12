@@ -82,6 +82,22 @@ della LAN. Guida completa: **[BUILD_RASPBERRY.md](BUILD_RASPBERRY.md)**.
 
 ---
 
+## 🍎 Gira anche su macOS (Apple Silicon / Intel)
+
+Build nativa Apple Silicon (M1/M2/M3/M4) e Intel.
+
+**Setup automatico** (Homebrew + build + bundle `.app` + config):
+```bash
+git clone https://github.com/iu8lmc/Decodius.git
+cd Decodius
+chmod +x setup_mac.sh && ./setup_mac.sh
+```
+
+Come su Linux, la config di Decodium va in `decodius_decodium.txt` (Decodium gira su un
+PC Windows della LAN). Guida completa: **[BUILD_MAC.md](BUILD_MAC.md)**.
+
+---
+
 ## Avvio
 
 1. Installa **Ollama** (https://ollama.com) e scegli il modello in `decodius_model.txt`
