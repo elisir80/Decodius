@@ -3,6 +3,15 @@ DECODIUS — Assistente vocale radioamatoriale
 
 GRAZIE per aver installato Decodius!
 
+NOVITA' 1.9 ALPHA
+-----------------
+- Scheda nominativo (QRZ): "mostrami la scheda di <call>" -> finestra con
+  mappa e dati HamQTH (nome, QTH, paese, locatore, QSL).
+- Cervello aggiornato a llama-3.3-70b (NVIDIA): piu' capace su italiano e comandi.
+- Comandi alla radio piu' robusti (valori, autorizzazione loopback).
+- Voce: solo cloud (Giuseppe) con voci selezionabili.
+- Multipiattaforma: gira anche su Raspberry Pi (vedi repo GitHub).
+
 NOVITA' 1.8 ALPHA
 -----------------
 - Wizard del cervello al primo avvio: ti guida a scegliere e attivare l'LLM.
