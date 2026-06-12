@@ -810,15 +810,17 @@ OllamaClient::OllamaClient(QObject* parent) : QObject(parent) {
              "esplicitamente di agire sulla radio. Comandi: 'modo' (valore FT8/FT4/FT2/CW), "
              "'banda' (valore es. 20m), 'dial' (hz), 'rx' (hz), 'tx' (hz), 'monitoraggio'/'autocq'/"
              "'autospot'/'quickqso' (attivo true/false), 'rispondi' (call + grid: risponde a un "
-             "chiamante CQ), 'tx_on'/'tx_off' (attiva/disattiva la TRASMISSIONE). Attenzione: "
-             "tx_on, rispondi, autocq mandano la radio IN TRASMISSIONE: fallo solo su richiesta chiara."},
+             "chiamante CQ), 'tx_on'/'tx_off' (attiva/disattiva la TRASMISSIONE), 'cw' (TRASMETTE in "
+             "MORSE il testo in 'valore' tramite il keyer della radio; opzionali hz=frequenza e wpm). "
+             "Attenzione: tx_on, rispondi, autocq, cw mandano la radio IN TRASMISSIONE: fallo solo su richiesta chiara."},
             {"parameters", QJsonObject{
                 {"type", "object"},
                 {"properties", QJsonObject{
                     {"comando", QJsonObject{{"type", "string"},
-                        {"description", "modo|banda|dial|rx|tx|monitoraggio|autocq|autospot|quickqso|rispondi|tx_on|tx_off"}}},
-                    {"valore", QJsonObject{{"type", "string"}, {"description", "modo o banda (es. FT8, 20m)"}}},
-                    {"hz", QJsonObject{{"type", "number"}, {"description", "frequenza in Hz (dial/rx/tx)"}}},
+                        {"description", "modo|banda|dial|rx|tx|monitoraggio|autocq|autospot|quickqso|rispondi|tx_on|tx_off|cw"}}},
+                    {"valore", QJsonObject{{"type", "string"}, {"description", "modo/banda (es. FT8, 20m) oppure il TESTO CW da trasmettere (per comando=cw)"}}},
+                    {"hz", QJsonObject{{"type", "number"}, {"description", "frequenza in Hz (dial/rx/tx/cw)"}}},
+                    {"wpm", QJsonObject{{"type", "number"}, {"description", "velocità CW in parole/minuto (per comando=cw, default 22)"}}},
                     {"attivo", QJsonObject{{"type", "boolean"}, {"description", "on/off per i toggle"}}},
                     {"call", QJsonObject{{"type", "string"}, {"description", "nominativo da chiamare (rispondi)"}}},
                     {"grid", QJsonObject{{"type", "string"}, {"description", "locatore del corrispondente (rispondi)"}}}
@@ -1469,6 +1471,15 @@ void OllamaClient::runDecodiumCommand(const QJsonObject& args, std::function<voi
     else if (cmd == "rispondi") body = {{"type","select_caller"},
                                         {"target_call", argStr("call").toUpper()},
                                         {"target_grid", argStr("grid").toUpper()}};
+    else if (cmd == "cw") {     // trasmissione CW via keyer della radio (Hamlib)
+        const QString testo = argStr("valore");
+        if (testo.isEmpty()) { done(QStringLiteral("Per il CW serve il testo da trasmettere (valore).")); return; }
+        body = {{"type","send_cw"}, {"text", testo}};
+        const double hz = argNum(args, "hz");
+        if (hz > 0) body["dial_frequency_hz"] = (qint64)hz;
+        const double wpm = argNum(args, "wpm");
+        if (wpm > 0) body["wpm"] = (int)wpm;
+    }
     else if (cmd == "tx_on")    body = {{"type","set_tx_enabled"},{"enabled", true}};
     else if (cmd == "tx_off")   body = {{"type","set_tx_enabled"},{"enabled", false}};
     else { done(QStringLiteral("Comando Decodium sconosciuto: %1").arg(cmd)); return; }
