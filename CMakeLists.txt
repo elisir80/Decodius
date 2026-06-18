@@ -11,7 +11,7 @@ set(CMAKE_AUTOMOC ON)
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Quick Multimedia Network)
 find_package(Qt6 QUIET OPTIONAL_COMPONENTS TextToSpeech)
 
-qt_standard_project_setup(REQUIRES 6.5)
+qt_standard_project_setup(REQUIRES 6.4)
 
 qt_add_executable(decodius
     main.cpp

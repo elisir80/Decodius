@@ -5,6 +5,7 @@
 #include <QIcon>
 #include <QFileInfo>
 #include <QDir>
+#include <QUrl>
 
 int main(int argc, char* argv[]) {
     QGuiApplication app(argc, argv);
@@ -21,7 +22,11 @@ int main(int argc, char* argv[]) {
 
     QQmlApplicationEngine engine;
     // I tipi AudioAnalyzer e Assistant sono registrati via QML_ELEMENT (qt_add_qml_module).
+#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
     engine.loadFromModule("Decodius", "Main");
+#else
+    engine.load(QUrl(QStringLiteral("qrc:/qt/qml/Decodius/Main.qml")));
+#endif
 
     if (engine.rootObjects().isEmpty())
         return -1;
