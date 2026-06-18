@@ -3,10 +3,17 @@
 ;  Compila con:  "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" decodius.iss
 ; ============================================================================
 #define MyAppName "Decodius"
-#define MyAppVersion "1.4"
+#ifndef MyAppVersion
+#define MyAppVersion "1.5"
+#endif
 #define MyAppPublisher "IU8LMC"
 #define MyAppExe "decodius.exe"
+#ifndef Build
 #define Build "C:\Users\IU8LMC\decodius\build"
+#endif
+#ifndef InstallerOutputDir
+#define InstallerOutputDir "C:\Users\IU8LMC\decodius\installer"
+#endif
 
 [Setup]
 AppId={{8F2A6C10-3D44-4E9B-9A1C-DEC0D1051A01}
@@ -21,7 +28,7 @@ LicenseFile=
 InfoBeforeFile={#Build}\LEGGIMI.txt
 UninstallDisplayIcon={app}\{#MyAppExe}
 UninstallDisplayName=Decodius
-OutputDir=C:\Users\IU8LMC\decodius\installer
+OutputDir={#InstallerOutputDir}
 OutputBaseFilename=Decodius-Setup-{#MyAppVersion}
 SetupIconFile={#Build}\decodius.ico
 Compression=lzma2/max

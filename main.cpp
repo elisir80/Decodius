@@ -4,13 +4,18 @@
 #include <QQmlContext>
 #include <QIcon>
 #include <QFileInfo>
+#include <QDir>
 
 int main(int argc, char* argv[]) {
     QGuiApplication app(argc, argv);
     app.setApplicationName("Decodius");
     app.setOrganizationName("Decodius");
     // Icona di finestra/taskbar (l'icona del file .exe arriva dalla risorsa .rc).
-    const QString iconPath = app.applicationDirPath() + QStringLiteral("/decodius.ico");
+    QString iconPath = app.applicationDirPath() + QStringLiteral("/decodius.ico");
+#ifdef Q_OS_MACOS
+    if (!QFileInfo::exists(iconPath))
+        iconPath = QDir(app.applicationDirPath()).absoluteFilePath(QStringLiteral("../Resources/decodius.ico"));
+#endif
     if (QFileInfo::exists(iconPath))
         app.setWindowIcon(QIcon(iconPath));
 

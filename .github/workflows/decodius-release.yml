@@ -1,0 +1,248 @@
+name: Decodius release builds
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build, for example v1.5"
+        required: true
+        default: "v1.5"
+
+permissions:
+  contents: write
+
+env:
+  QT_VERSION: "6.8.3"
+
+jobs:
+  windows-x64:
+    name: Windows x64 installer
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          modules: "qtmultimedia qtspeech"
+          cache: true
+
+      - name: Install tools
+        shell: pwsh
+        run: |
+          choco install ninja innosetup --no-progress -y
+
+      - name: Configure
+        shell: pwsh
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        shell: pwsh
+        run: |
+          cmake --build build --parallel
+
+      - name: Deploy Qt runtime
+        shell: pwsh
+        run: |
+          windeployqt --release --qmldir "$pwd" "$pwd\build\decodius.exe"
+
+      - name: Build portable Python voice runtime
+        shell: pwsh
+        env:
+          PYEDGE_DIR: ${{ github.workspace }}\build\pyedge
+        run: |
+          .\make_pyedge.ps1
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $tag = "${{ github.event.inputs.tag || github.ref_name }}"
+          $version = $tag.TrimStart("v")
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          & $iscc "/DMyAppVersion=$version" "/DBuild=$pwd\build" "/DInstallerOutputDir=$pwd\dist" decodius.iss
+
+      - name: Upload release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          body_path: docs/release-notes/v1.5.md
+          files: dist/Decodius-Setup-*.exe
+
+  macos:
+    name: macOS DMG
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          modules: "qtmultimedia qtspeech"
+          cache: true
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: |
+          cmake --build build --parallel 4 --target decodius
+
+      - name: Create DMG
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          VERSION="${TAG#v}"
+          hdiutil create \
+            -volname "Decodius ${VERSION}" \
+            -srcfolder "build/Decodius.app" \
+            -ov \
+            -format UDZO \
+            "Decodius-${VERSION}-macOS.dmg"
+
+      - name: Upload release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          body_path: docs/release-notes/v1.5.md
+          files: Decodius-*-macOS.dmg
+
+  linux-x86_64:
+    name: Linux x86_64 AppImage
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential cmake ninja-build patchelf desktop-file-utils wget \
+            libgl1-mesa-dev libegl1-mesa-dev libxkbcommon-x11-0 libxcb-cursor0 \
+            libfontconfig1 libdbus-1-3 libpulse-mainloop-glib0 libasound2t64
+          sudo apt-get install -y libfuse2 || sudo apt-get install -y libfuse2t64
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          modules: "qtmultimedia qtspeech"
+          cache: true
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: |
+          cmake --build build --parallel
+
+      - name: Build AppImage
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          VERSION="${TAG#v}"
+          mkdir -p AppDir/usr/bin AppDir/usr/share/applications AppDir/usr/share/icons/hicolor/256x256/apps
+          cp build/decodius AppDir/usr/bin/
+          cp build/decodius_model.txt build/decodius_system.txt build/decodius_ham_kb.md AppDir/usr/bin/
+          cp -R build/edge AppDir/usr/bin/edge
+          cp decodius_preview.png AppDir/usr/share/icons/hicolor/256x256/apps/decodius.png
+          cat > AppDir/usr/share/applications/decodius.desktop <<'EOF'
+          [Desktop Entry]
+          Type=Application
+          Name=Decodius
+          Exec=decodius
+          Icon=decodius
+          Categories=Utility;HamRadio;
+          Terminal=false
+          EOF
+          wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          wget -q https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
+          chmod +x linuxdeploy-x86_64.AppImage linuxdeploy-plugin-qt-x86_64.AppImage
+          export QMAKE="$(command -v qmake6 || command -v qmake)"
+          ./linuxdeploy-x86_64.AppImage --appdir AppDir --plugin qt --output appimage
+          mv Decodius*.AppImage "Decodius-${VERSION}-linux-x86_64.AppImage"
+
+      - name: Upload release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          body_path: docs/release-notes/v1.5.md
+          files: Decodius-*-linux-x86_64.AppImage
+
+  linux-aarch64:
+    name: Linux aarch64 AppImage
+    runs-on: ubuntu-24.04-arm
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential cmake ninja-build patchelf desktop-file-utils wget \
+            qt6-base-dev qt6-declarative-dev qt6-multimedia-dev qt6-speech-dev \
+            libgl1-mesa-dev libegl1-mesa-dev libxkbcommon-x11-0 libxcb-cursor0 \
+            libfontconfig1 libdbus-1-3 libpulse-mainloop-glib0 libasound2t64
+          sudo apt-get install -y libfuse2 || sudo apt-get install -y libfuse2t64
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: |
+          cmake --build build --parallel
+
+      - name: Build AppImage
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          VERSION="${TAG#v}"
+          mkdir -p AppDir/usr/bin AppDir/usr/share/applications AppDir/usr/share/icons/hicolor/256x256/apps
+          cp build/decodius AppDir/usr/bin/
+          cp build/decodius_model.txt build/decodius_system.txt build/decodius_ham_kb.md AppDir/usr/bin/
+          cp -R build/edge AppDir/usr/bin/edge
+          cp decodius_preview.png AppDir/usr/share/icons/hicolor/256x256/apps/decodius.png
+          cat > AppDir/usr/share/applications/decodius.desktop <<'EOF'
+          [Desktop Entry]
+          Type=Application
+          Name=Decodius
+          Exec=decodius
+          Icon=decodius
+          Categories=Utility;HamRadio;
+          Terminal=false
+          EOF
+          wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-aarch64.AppImage
+          wget -q https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-aarch64.AppImage
+          chmod +x linuxdeploy-aarch64.AppImage linuxdeploy-plugin-qt-aarch64.AppImage
+          export QMAKE="$(command -v qmake6 || command -v qmake)"
+          ./linuxdeploy-aarch64.AppImage --appdir AppDir --plugin qt --output appimage
+          mv Decodius*.AppImage "Decodius-${VERSION}-linux-aarch64.AppImage"
+
+      - name: Upload release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          body_path: docs/release-notes/v1.5.md
+          files: Decodius-*-linux-aarch64.AppImage

@@ -3,12 +3,21 @@
 #include <QLocale>
 #include <QRegularExpression>
 #include <QCoreApplication>
+#include <QDesktopServices>
 #include <QFile>
 #include <QFileInfo>
 #include <QDir>
 #include <QStandardPaths>
 #include <QUrl>
 #include <QTimer>
+#include <QProcess>
+#include <QProcessEnvironment>
+#include <QNetworkReply>
+#include <QNetworkRequest>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonArray>
+#include <algorithm>
 
 static const char* kSystemPrompt =
     "Ti chiami Decodius. Sei l'assistente personale di Martino, radioamatore (IU8LMC) "
@@ -17,11 +26,28 @@ static const char* kSystemPrompt =
     "Niente elenchi o markdown quando parli: frasi brevi e naturali, una o due quando bastano. "
     "Tono pratico e cordiale. Se non sai qualcosa, dillo con onestà.";
 
+static QString decodiusResourcePath(const QString& relativePath) {
+    const QString appDir = QCoreApplication::applicationDirPath();
+    QStringList bases{appDir};
+#if defined(Q_OS_MACOS)
+    bases << QDir(appDir).absoluteFilePath(QStringLiteral("../Resources"));
+#endif
+    for (const QString& base : bases) {
+        const QString path = QDir(base).absoluteFilePath(relativePath);
+        if (QFileInfo::exists(path))
+            return path;
+    }
+    return QDir(appDir).absoluteFilePath(relativePath);
+}
+
 Assistant::Assistant(QObject* parent) : QObject(parent) {
+    m_availableModels << m_ollama.model();
+    m_modelStatus = QStringLiteral("Modello attivo: %1").arg(m_ollama.model());
+
     // Persona/competenza caricata da file (decodius_system.txt, esperto radioamatori),
     // così è aggiornabile senza ricompilare; fallback al prompt minimo integrato.
     m_sysPromptRaw = QString::fromUtf8(kSystemPrompt);
-    QFile pf(QCoreApplication::applicationDirPath() + QStringLiteral("/decodius_system.txt"));
+    QFile pf(decodiusResourcePath(QStringLiteral("decodius_system.txt")));
     if (pf.open(QIODevice::ReadOnly | QIODevice::Text)) {
         const QString loaded = QString::fromUtf8(pf.readAll()).trimmed();
         if (!loaded.isEmpty()) m_sysPromptRaw = loaded;
@@ -87,7 +113,7 @@ Assistant::Assistant(QObject* parent) : QObject(parent) {
     });
 
     // ── Voce-in: riconoscimento vocale locale (Whisper su CPU, niente VRAM) ──
-    const QString wbase = QCoreApplication::applicationDirPath() + QStringLiteral("/whisper");
+    const QString wbase = decodiusResourcePath(QStringLiteral("whisper"));
     m_whisper = new WhisperStt(wbase + QStringLiteral("/venv/Scripts/python.exe"),
                                wbase + QStringLiteral("/whisper_server.py"),
                                QStringLiteral("small"), 5068, this);
@@ -116,11 +142,11 @@ Assistant::Assistant(QObject* parent) : QObject(parent) {
     // realismo gratuito (Chatterbox locale troppo lento, Chatterbox cloud a pagamento).
     // Server edge_server.py (POST /tts -> MP3), Python 3.14 con edge-tts. Fallback:
     // Piper -> QTextToSpeech. (Kokoro/XTTS/Chatterbox restano disponibili come alternative.)
-    const QString ebase = appDir + QStringLiteral("/edge");
+    const QString ebase = decodiusResourcePath(QStringLiteral("edge"));
     // Python per la voce edge: preferisci quello PORTATILE bundlato (pyedge, per
     // l'installer pubblico), poi fallback a un Python di sistema (sviluppo).
-    QString epy = appDir + QStringLiteral("/pyedge/pythonw.exe");
-    if (!QFileInfo::exists(epy)) epy = appDir + QStringLiteral("/pyedge/python.exe");
+    QString epy = decodiusResourcePath(QStringLiteral("pyedge/pythonw.exe"));
+    if (!QFileInfo::exists(epy)) epy = decodiusResourcePath(QStringLiteral("pyedge/python.exe"));
     if (!QFileInfo::exists(epy)) epy = QStringLiteral("C:/Python314/pythonw.exe");
     if (!QFileInfo::exists(epy)) epy = QStringLiteral("C:/Python314/python.exe");
     m_xtts = new XttsTts(epy,
@@ -134,7 +160,7 @@ Assistant::Assistant(QObject* parent) : QObject(parent) {
     }
 
     // Fallback voce: Piper (CPU, cartella "piper/").
-    const QString base = appDir + QStringLiteral("/piper");
+    const QString base = decodiusResourcePath(QStringLiteral("piper"));
     m_piper = new PiperTts(base + QStringLiteral("/piper.exe"),
                            base + QStringLiteral("/voices/it_IT-paola-medium.onnx"),
                            this);
@@ -318,6 +344,296 @@ void Assistant::attachImage(const QString& fileUrl) {
 
 void Assistant::clearImage() {
     if (!m_pendingImageB64.isEmpty()) { m_pendingImageB64.clear(); emit hasImageChanged(); }
+}
+
+QString Assistant::findOllamaExecutable() const {
+    QString exe = QStandardPaths::findExecutable(QStringLiteral("ollama"));
+    if (!exe.isEmpty()) return exe;
+    exe = QStandardPaths::findExecutable(QStringLiteral("ollama.exe"));
+    if (!exe.isEmpty()) return exe;
+
+    QStringList candidates;
+#if defined(Q_OS_WIN)
+    const QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    const QString localAppData = env.value(QStringLiteral("LOCALAPPDATA"));
+    const QString programFiles = env.value(QStringLiteral("ProgramFiles"));
+    const QString programFilesX86 = env.value(QStringLiteral("ProgramFiles(x86)"));
+    if (!localAppData.isEmpty())
+        candidates << localAppData + QStringLiteral("/Programs/Ollama/ollama.exe");
+    if (!programFiles.isEmpty())
+        candidates << programFiles + QStringLiteral("/Ollama/ollama.exe");
+    if (!programFilesX86.isEmpty())
+        candidates << programFilesX86 + QStringLiteral("/Ollama/ollama.exe");
+#elif defined(Q_OS_MACOS)
+    const QString home = QDir::homePath();
+    candidates << QStringLiteral("/Applications/Ollama.app/Contents/Resources/ollama")
+               << home + QStringLiteral("/Applications/Ollama.app/Contents/Resources/ollama")
+               << QStringLiteral("/opt/homebrew/bin/ollama")
+               << QStringLiteral("/usr/local/bin/ollama");
+#else
+    candidates << QStringLiteral("/usr/local/bin/ollama")
+               << QStringLiteral("/usr/bin/ollama")
+               << QStringLiteral("/bin/ollama");
+#endif
+
+    for (const QString& candidate : candidates) {
+        const QFileInfo info(candidate);
+        if (info.exists() && info.isFile())
+            return info.absoluteFilePath();
+    }
+    return {};
+}
+
+bool Assistant::hasOllamaInstall() const {
+    if (!findOllamaExecutable().isEmpty()) return true;
+#if defined(Q_OS_MACOS)
+    const QString home = QDir::homePath();
+    return QFileInfo::exists(QStringLiteral("/Applications/Ollama.app"))
+        || QFileInfo::exists(home + QStringLiteral("/Applications/Ollama.app"));
+#else
+    return false;
+#endif
+}
+
+QString Assistant::setupScriptPath() const {
+    const QString appDir = QCoreApplication::applicationDirPath();
+    const QString currentDir = QDir::currentPath();
+    const QStringList candidates = {
+        appDir + QStringLiteral("/setup_cervello.ps1"),
+        decodiusResourcePath(QStringLiteral("setup_cervello.ps1")),
+        currentDir + QStringLiteral("/setup_cervello.ps1"),
+        QDir(appDir).absoluteFilePath(QStringLiteral("../setup_cervello.ps1"))
+    };
+    for (const QString& candidate : candidates) {
+        const QFileInfo info(candidate);
+        if (info.exists() && info.isFile())
+            return info.absoluteFilePath();
+    }
+    return {};
+}
+
+QString Assistant::ollamaInstallHint() const {
+#if defined(Q_OS_WIN)
+    return QStringLiteral("Windows: usa Configura automaticamente oppure installa Ollama dal sito ufficiale.");
+#elif defined(Q_OS_MACOS)
+    return QStringLiteral("macOS: scarica Ollama.dmg dal sito ufficiale, trascina Ollama in Applicazioni e avvia Ollama.");
+#else
+    return QStringLiteral("Linux: installa con il comando ufficiale: curl -fsSL https://ollama.com/install.sh | sh");
+#endif
+}
+
+void Assistant::updateOllamaPrerequisite(bool installed, bool reachable, const QString& status) {
+    const bool changed = (m_ollamaInstalled != installed)
+        || (m_ollamaReachable != reachable)
+        || (m_ollamaStatusText != status);
+    m_ollamaInstalled = installed;
+    m_ollamaReachable = reachable;
+    m_ollamaStatusText = status;
+    if (changed)
+        emit ollamaPrerequisiteChanged();
+}
+
+void Assistant::requestOllamaPrompt(bool userRequested) {
+    if (!userRequested && m_ollamaStartupPromptShown)
+        return;
+    m_ollamaStartupPromptShown = true;
+
+#if defined(Q_OS_WIN)
+    const bool canRunSetup = !setupScriptPath().isEmpty();
+#else
+    const bool canRunSetup = false;
+#endif
+    const bool canStart = m_ollamaInstalled;
+    const QString title = m_ollamaInstalled
+        ? QStringLiteral("Ollama non risponde")
+        : QStringLiteral("Ollama richiesto");
+    const QString summary = m_ollamaInstalled
+        ? QStringLiteral("Decodius ha trovato Ollama, ma il servizio locale non risponde su 127.0.0.1:11434.")
+        : QStringLiteral("Decodius usa Ollama come cervello: senza Ollama installato non puo' generare risposte.");
+    const QString detail = canRunSetup
+        ? QStringLiteral("Puoi avviare la configurazione automatica: installa o prepara Ollama, avvia il servizio e configura il modello richiesto.")
+        : ollamaInstallHint() + QStringLiteral("\n\nDopo l'installazione torna qui e premi Ricontrolla.");
+
+    emit ollamaSetupPromptRequested(title, summary, detail, canStart, canRunSetup);
+}
+
+void Assistant::checkOllamaPrerequisite(bool userRequested) {
+    const bool installedOnDisk = hasOllamaInstall();
+    updateOllamaPrerequisite(installedOnDisk, m_ollamaReachable,
+                             QStringLiteral("Verifica di Ollama in corso..."));
+
+    QNetworkRequest req{QUrl(QStringLiteral("http://127.0.0.1:11434/api/version"))};
+    QNetworkReply* reply = m_modelsNet.get(req);
+    QTimer::singleShot(2500, reply, [reply]() {
+        if (reply->isRunning())
+            reply->abort();
+    });
+
+    connect(reply, &QNetworkReply::finished, this, [this, reply, userRequested, installedOnDisk]() {
+        const QNetworkReply::NetworkError err = reply->error();
+        const QString errText = reply->errorString();
+        reply->deleteLater();
+
+        const bool reachable = (err == QNetworkReply::NoError);
+        const bool installed = installedOnDisk || reachable;
+        const QString status = reachable
+            ? QStringLiteral("Ollama attivo e raggiungibile.")
+            : (installed
+                ? QStringLiteral("Ollama installato, ma il servizio non risponde: %1").arg(errText)
+                : QStringLiteral("Ollama non trovato nel sistema."));
+
+        updateOllamaPrerequisite(installed, reachable, status);
+        if (!reachable)
+            requestOllamaPrompt(userRequested);
+    });
+}
+
+void Assistant::openOllamaDownload() {
+#if defined(Q_OS_WIN)
+    const QUrl url(QStringLiteral("https://ollama.com/download/windows"));
+#elif defined(Q_OS_MACOS)
+    const QUrl url(QStringLiteral("https://ollama.com/download/mac"));
+#else
+    const QUrl url(QStringLiteral("https://ollama.com/download/linux"));
+#endif
+    QDesktopServices::openUrl(url);
+}
+
+bool Assistant::runOllamaSetup() {
+#if !defined(Q_OS_WIN)
+    openOllamaDownload();
+    return false;
+#else
+    const QString script = setupScriptPath();
+    if (script.isEmpty()) {
+        openOllamaDownload();
+        return false;
+    }
+
+    const bool ok = QProcess::startDetached(
+        QStringLiteral("powershell.exe"),
+        {QStringLiteral("-ExecutionPolicy"), QStringLiteral("Bypass"),
+         QStringLiteral("-File"), QDir::toNativeSeparators(script)});
+    if (!ok) {
+        openOllamaDownload();
+        return false;
+    }
+
+    m_ollamaSetupRunning = true;
+    m_ollamaStatusText = QStringLiteral("Configurazione Ollama avviata in una finestra separata.");
+    emit ollamaPrerequisiteChanged();
+    QTimer::singleShot(30000, this, [this]() {
+        m_ollamaSetupRunning = false;
+        emit ollamaPrerequisiteChanged();
+        checkOllamaPrerequisite(false);
+    });
+    return true;
+#endif
+}
+
+bool Assistant::startOllamaService() {
+    const QString exe = findOllamaExecutable();
+    bool ok = false;
+    if (!exe.isEmpty()) {
+        ok = QProcess::startDetached(exe, {QStringLiteral("serve")});
+    }
+#if defined(Q_OS_MACOS)
+    if (!ok) {
+        const QString home = QDir::homePath();
+        if (QFileInfo::exists(QStringLiteral("/Applications/Ollama.app")))
+            ok = QProcess::startDetached(QStringLiteral("open"), {QStringLiteral("-a"), QStringLiteral("Ollama")});
+        else if (QFileInfo::exists(home + QStringLiteral("/Applications/Ollama.app")))
+            ok = QProcess::startDetached(QStringLiteral("open"), {home + QStringLiteral("/Applications/Ollama.app")});
+    }
+#endif
+    if (ok) {
+        m_ollamaStatusText = QStringLiteral("Avvio di Ollama richiesto. Ricontrollo tra pochi secondi...");
+        emit ollamaPrerequisiteChanged();
+        QTimer::singleShot(2500, this, [this]() { checkOllamaPrerequisite(false); });
+        QTimer::singleShot(6500, this, [this]() { checkOllamaPrerequisite(false); });
+    } else {
+        openOllamaDownload();
+    }
+    return ok;
+}
+
+void Assistant::refreshModels() {
+    if (m_modelsLoading) return;
+
+    m_modelsLoading = true;
+    m_modelStatus = QStringLiteral("Lettura modelli da Ollama...");
+    emit modelsLoadingChanged();
+    emit modelStatusChanged();
+
+    QNetworkRequest req{QUrl(QStringLiteral("http://localhost:11434/api/tags"))};
+    QNetworkReply* reply = m_modelsNet.get(req);
+    QTimer::singleShot(6000, reply, [reply]() {
+        if (reply->isRunning())
+            reply->abort();
+    });
+
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        const QNetworkReply::NetworkError err = reply->error();
+        const QByteArray raw = reply->readAll();
+        const QString errText = reply->errorString();
+        reply->deleteLater();
+
+        QStringList next = m_availableModels;
+        if (!next.contains(m_ollama.model()))
+            next.prepend(m_ollama.model());
+
+        if (err == QNetworkReply::NoError) {
+            QJsonParseError parseError;
+            const QJsonObject root = QJsonDocument::fromJson(raw, &parseError).object();
+            if (parseError.error == QJsonParseError::NoError) {
+                next.clear();
+                const QJsonArray models = root.value(QStringLiteral("models")).toArray();
+                for (const QJsonValue& value : models) {
+                    const QJsonObject obj = value.toObject();
+                    QString name = obj.value(QStringLiteral("name")).toString().trimmed();
+                    if (name.isEmpty())
+                        name = obj.value(QStringLiteral("model")).toString().trimmed();
+                    if (!name.isEmpty() && !next.contains(name))
+                        next << name;
+                }
+                std::sort(next.begin(), next.end(), [](const QString& a, const QString& b) {
+                    return QString::compare(a, b, Qt::CaseInsensitive) < 0;
+                });
+                if (!next.contains(m_ollama.model()))
+                    next.prepend(m_ollama.model());
+                m_modelStatus = next.isEmpty()
+                    ? QStringLiteral("Nessun modello trovato in Ollama.")
+                    : QStringLiteral("%1 modelli disponibili.").arg(next.size());
+            } else {
+                m_modelStatus = QStringLiteral("Risposta Ollama non valida.");
+            }
+        } else {
+            m_modelStatus = QStringLiteral("Ollama non raggiungibile: %1").arg(errText);
+        }
+
+        if (next != m_availableModels) {
+            m_availableModels = next;
+            emit availableModelsChanged();
+        }
+        m_modelsLoading = false;
+        emit modelsLoadingChanged();
+        emit modelStatusChanged();
+    });
+}
+
+void Assistant::setCurrentModel(const QString& model) {
+    const QString next = model.trimmed();
+    if (next.isEmpty() || next == m_ollama.model()) return;
+
+    m_ollama.cancel();
+    m_ollama.setModel(next);
+    if (!m_availableModels.contains(next)) {
+        m_availableModels.prepend(next);
+        emit availableModelsChanged();
+    }
+    m_modelStatus = QStringLiteral("Modello attivo: %1").arg(next);
+    emit currentModelChanged();
+    emit modelStatusChanged();
 }
 
 void Assistant::interrupt() {

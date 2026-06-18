@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
 import QtQuick.Effects
+import QtQuick.Dialogs
 import Decodius
 
 Window {
@@ -34,10 +35,24 @@ Window {
 
     AudioAnalyzer { id: analyzer }
     Assistant     { id: assistant }
+    property string ollamaPromptTitle: ""
+    property string ollamaPromptSummary: ""
+    property string ollamaPromptDetail: ""
+    property bool ollamaPromptCanStart: false
+    property bool ollamaPromptCanRunSetup: false
+    Timer {
+        id: ollamaStartupTimer
+        interval: 800
+        repeat: false
+        onTriggered: assistant.checkOllamaPrerequisite(false)
+    }
     Component.onCompleted: {
         analyzer.start()
         if (assistant.needsCallSign) callDialog.open()   // primo avvio: chiedi il nominativo
-        else showWelcome()
+        else {
+            showWelcome()
+            ollamaStartupTimer.start()
+        }
     }
     function showWelcome() {
         var c = assistant.callSign.length ? assistant.callSign : "OM"
@@ -82,6 +97,14 @@ Window {
         }
         function onConfirmationRequested(title, detail) {
             confirmDialog.title = title; confirmDetail.text = detail; confirmDialog.open()
+        }
+        function onOllamaSetupPromptRequested(title, summary, detail, canStart, canRunSetup) {
+            root.ollamaPromptTitle = title
+            root.ollamaPromptSummary = summary
+            root.ollamaPromptDetail = detail
+            root.ollamaPromptCanStart = canStart
+            root.ollamaPromptCanRunSetup = canRunSetup
+            ollamaDialog.open()
         }
     }
 
@@ -143,6 +166,19 @@ Window {
                        font.pixelSize: 20; font.letterSpacing: 4 }
                 Text { text: "assistente radioamatoriale" + (assistant.callSign.length ? " · " + assistant.callSign : "")
                        color: "#6f93a4"; font.pixelSize: 11; font.letterSpacing: 1 }
+            }
+            PillButton {
+                anchors.right: parent.right
+                anchors.top: parent.top
+                width: 46
+                height: 36
+                text: "⚙"
+                ToolTip.visible: hovered
+                ToolTip.text: "Impostazioni"
+                onClicked: {
+                    settingsDialog.open()
+                    assistant.refreshModels()
+                }
             }
 
             // ORB (più grande)
@@ -502,16 +538,30 @@ Window {
                     text: assistant.hasImage ? "📷✓" : "📷"
                     fg: assistant.hasImage ? "#04121a" : root.accent
                     baseColor: assistant.hasImage ? root.accent : "#10202b"
-                    onClicked: if (assistant.hasImage) assistant.clearImage()
+                    ToolTip.visible: hovered
+                    ToolTip.text: assistant.hasImage ? "Rimuovi immagine" : "Allega immagine"
+                    onClicked: {
+                        if (assistant.hasImage) assistant.clearImage()
+                        else imagePicker.open()
+                    }
                 }
                 PillButton {
                     text: assistant.alwaysListening ? "🎤" : "🎤"
                     fg: assistant.alwaysListening ? "#04121a" : root.accent
                     baseColor: assistant.alwaysListening ? root.accent : "#10202b"
+                    ToolTip.visible: hovered
+                    ToolTip.text: assistant.alwaysListening ? "Disattiva microfono" : "Attiva microfono"
                     onClicked: assistant.setListening(!assistant.alwaysListening)
                 }
             }
         }
+    }
+
+    FileDialog {
+        id: imagePicker
+        title: "Allega immagine"
+        nameFilters: ["Immagini (*.png *.jpg *.jpeg *.webp *.bmp)", "Tutti i file (*)"]
+        onAccepted: assistant.attachImage(selectedFile)
     }
 
     // ───────── Drop immagine (vision) ─────────
@@ -530,6 +580,259 @@ Window {
         border.color: root.accent; border.width: 2; radius: 16
         Text { anchors.centerIn: parent; text: "Rilascia l'immagine per allegarla a Decodius"
                color: root.accent; font.bold: true; font.pixelSize: 20 }
+    }
+
+    // ───────── Prerequisito: Ollama ─────────
+    Dialog {
+        id: ollamaDialog
+        modal: true
+        anchors.centerIn: parent
+        width: Math.min(root.width - 80, 620)
+        padding: 18
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        background: Rectangle {
+            radius: 14
+            color: "#0c141d"
+            border.color: Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.55)
+            border.width: 1
+        }
+        contentItem: ColumnLayout {
+            spacing: 12
+            Text {
+                text: root.ollamaPromptTitle
+                color: "#eaf6fb"
+                font.bold: true
+                font.pixelSize: 20
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+            }
+            Text {
+                text: root.ollamaPromptSummary
+                color: "#cfe9f2"
+                font.pixelSize: 13
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+            }
+            Rectangle {
+                Layout.fillWidth: true
+                radius: 10
+                color: "#08131d"
+                border.color: Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.28)
+                border.width: 1
+                implicitHeight: hintText.implicitHeight + 22
+                Text {
+                    id: hintText
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.leftMargin: 12
+                    anchors.rightMargin: 12
+                    text: root.ollamaPromptDetail
+                    color: "#9fc0cf"
+                    font.pixelSize: 12
+                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                }
+            }
+            Text {
+                Layout.fillWidth: true
+                text: assistant.ollamaStatusText
+                color: assistant.ollamaReachable ? "#3dffa0" : "#ffb02e"
+                font.pixelSize: 12
+                wrapMode: Text.WordWrap
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 10
+                Button {
+                    visible: root.ollamaPromptCanRunSetup
+                    text: assistant.ollamaSetupRunning ? "Configurazione avviata" : "Configura automaticamente"
+                    enabled: !assistant.ollamaSetupRunning
+                    onClicked: assistant.runOllamaSetup()
+                    background: Rectangle { radius: 8; color: root.accent; opacity: parent.enabled ? 0.95 : 0.45 }
+                    contentItem: Text {
+                        text: parent.text
+                        color: "#04121a"
+                        font.bold: true
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                }
+                Button {
+                    visible: root.ollamaPromptCanStart && !assistant.ollamaReachable
+                    text: "Avvia Ollama"
+                    onClicked: assistant.startOllamaService()
+                    background: Rectangle { radius: 8; color: "#0c141d"; border.color: root.accent; border.width: 1 }
+                    contentItem: Text {
+                        text: parent.text
+                        color: root.accent
+                        font.bold: true
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                }
+                Button {
+                    text: "Scarica Ollama"
+                    onClicked: assistant.openOllamaDownload()
+                    background: Rectangle { radius: 8; color: "#0c141d"; border.color: "#7a8a95"; border.width: 1 }
+                    contentItem: Text {
+                        text: parent.text
+                        color: "#cfe9f2"
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                }
+                Item { Layout.fillWidth: true }
+                Button {
+                    text: "Ricontrolla"
+                    onClicked: assistant.checkOllamaPrerequisite(true)
+                    background: Rectangle { radius: 8; color: "#0c141d"; border.color: "#7a8a95"; border.width: 1 }
+                    contentItem: Text {
+                        text: parent.text
+                        color: "#cfe9f2"
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                }
+                Button {
+                    text: "Non ora"
+                    onClicked: ollamaDialog.close()
+                    background: Rectangle { radius: 8; color: "#17232d" }
+                    contentItem: Text {
+                        text: parent.text
+                        color: "#cfe9f2"
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                }
+            }
+        }
+    }
+
+    // ───────── Settings: modello Ollama ─────────
+    Dialog {
+        id: settingsDialog
+        modal: true
+        anchors.centerIn: parent
+        width: Math.min(root.width - 80, 520)
+        padding: 18
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        background: Rectangle {
+            radius: 14
+            color: "#0c141d"
+            border.color: Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.55)
+            border.width: 1
+        }
+        contentItem: ColumnLayout {
+            spacing: 14
+            Text {
+                text: "Impostazioni"
+                color: "#eaf6fb"
+                font.bold: true
+                font.pixelSize: 20
+            }
+            Text {
+                text: "Modello Ollama"
+                color: root.accent
+                font.bold: true
+                font.pixelSize: 12
+                font.letterSpacing: 1
+            }
+            ComboBox {
+                id: modelCombo
+                Layout.fillWidth: true
+                enabled: !assistant.modelsLoading && assistant.availableModels.length > 0
+                model: assistant.availableModels
+                onActivated: assistant.setCurrentModel(currentText)
+                background: Rectangle {
+                    radius: 10
+                    color: "#08131d"
+                    border.color: modelCombo.activeFocus ? root.accent
+                        : Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.35)
+                    border.width: 1
+                }
+                contentItem: Text {
+                    text: modelCombo.displayText
+                    color: "#eaf6fb"
+                    font.pixelSize: 14
+                    verticalAlignment: Text.AlignVCenter
+                    leftPadding: 12
+                    elide: Text.ElideMiddle
+                }
+                popup.background: Rectangle {
+                    color: "#08131d"
+                    border.color: Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.45)
+                    radius: 8
+                }
+                delegate: ItemDelegate {
+                    width: modelCombo.width
+                    text: modelData
+                    highlighted: modelCombo.highlightedIndex === index
+                    contentItem: Text {
+                        text: parent.text
+                        color: parent.highlighted ? "#04121a" : "#eaf6fb"
+                        font.pixelSize: 13
+                        elide: Text.ElideMiddle
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    background: Rectangle {
+                        color: parent.highlighted ? root.accent : "#08131d"
+                    }
+                }
+            }
+            Text {
+                Layout.fillWidth: true
+                text: assistant.modelsLoading ? "Caricamento modelli..." : assistant.modelStatus
+                color: "#9fc0cf"
+                font.pixelSize: 12
+                wrapMode: Text.WordWrap
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 10
+                Button {
+                    text: "Aggiorna"
+                    enabled: !assistant.modelsLoading
+                    onClicked: assistant.refreshModels()
+                    background: Rectangle {
+                        radius: 8
+                        color: "#0c141d"
+                        border.color: root.accent
+                        border.width: 1
+                    }
+                    contentItem: Text {
+                        text: parent.text
+                        color: root.accent
+                        font.bold: true
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                }
+                Item { Layout.fillWidth: true }
+                Button {
+                    text: "Chiudi"
+                    onClicked: settingsDialog.close()
+                    background: Rectangle { radius: 8; color: root.accent }
+                    contentItem: Text {
+                        text: parent.text
+                        color: "#04121a"
+                        font.bold: true
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                }
+            }
+        }
+
+        onOpened: syncModelIndex()
+        function syncModelIndex() {
+            var idx = assistant.availableModels.indexOf(assistant.currentModel)
+            if (idx >= 0) modelCombo.currentIndex = idx
+        }
+        Connections {
+            target: assistant
+            function onAvailableModelsChanged() { settingsDialog.syncModelIndex() }
+            function onCurrentModelChanged() { settingsDialog.syncModelIndex() }
+        }
     }
 
     // ───────── Dialog conferma strumenti in scrittura ─────────
@@ -599,6 +902,7 @@ Window {
             assistant.setCallSign(c)
             callDialog.close()
             showWelcome()
+            ollamaStartupTimer.start()
         }
     }
 }

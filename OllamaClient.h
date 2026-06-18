@@ -15,7 +15,8 @@ class OllamaClient : public QObject {
 public:
     explicit OllamaClient(QObject* parent = nullptr);
 
-    void setModel(const QString& m) { m_model = m; }
+    QString model() const { return m_model; }
+    void setModel(const QString& m);
     void setTimeout(int ms) { m_timeoutMs = ms; }
     void setSystemPrompt(const QString& s);
     // Immagine (base64) da allegare al PROSSIMO messaggio utente (vision).
@@ -42,6 +43,7 @@ private:
     void onReadyRead();                 // parsing incrementale NDJSON
     void onFinished();                  // chiusura stream (successo o errore)
     void abortCurrent();                // interrompe la reply in corso
+    QString modelConfigPath() const;     // override modello in cartella utente
 
     // Esecuzione dei tool richiesti dal modello (sincroni e asincroni).
     void handleToolCalls();             // registra l'assistant msg e avvia l'esecuzione

@@ -21,6 +21,20 @@
 // Limite massimo di round di tool calling per una singola domanda (anti-loop).
 static constexpr int kMaxToolRounds = 5;
 
+static QString decodiusResourcePath(const QString& relativePath) {
+    const QString appDir = QCoreApplication::applicationDirPath();
+    QStringList bases{appDir};
+#if defined(Q_OS_MACOS)
+    bases << QDir(appDir).absoluteFilePath(QStringLiteral("../Resources"));
+#endif
+    for (const QString& base : bases) {
+        const QString path = QDir(base).absoluteFilePath(relativePath);
+        if (QFileInfo::exists(path))
+            return path;
+    }
+    return QDir(appDir).absoluteFilePath(relativePath);
+}
+
 // ───────────────────────── Strumenti locali ─────────────────────────
 
 // Elenca il contenuto di una cartella. Ritorna testo pronto per il modello.
@@ -94,11 +108,11 @@ static QString runReadFile(const QJsonObject& args) {
     return out;
 }
 
-// Consulta la knowledge base radioamatori (decodius_ham_kb.md accanto all'exe),
+// Consulta la knowledge base radioamatori (bundle Resources su macOS, accanto all'exe altrove),
 // restituendo i paragrafi pertinenti all'argomento richiesto.
 static QString runHamKb(const QJsonObject& args) {
     const QString topic = args.value("topic").toString().trimmed();
-    QFile f(QCoreApplication::applicationDirPath() + QStringLiteral("/decodius_ham_kb.md"));
+    QFile f(decodiusResourcePath(QStringLiteral("decodius_ham_kb.md")));
     if (!f.open(QIODevice::ReadOnly | QIODevice::Text))
         return QStringLiteral("Knowledge base radioamatori non disponibile.");
     const QString kb = QString::fromUtf8(f.readAll());
@@ -427,11 +441,17 @@ OllamaClient::OllamaClient(QObject* parent) : QObject(parent) {
 
     // Modello configurabile da file (decodius_model.txt) senza ricompilare: utile
     // per cambiare cervello (es. qwen3-coder:30b, qwen3:30b, gemma4 per la vision).
-    QFile mf(QCoreApplication::applicationDirPath() + QStringLiteral("/decodius_model.txt"));
+    QFile mf(decodiusResourcePath(QStringLiteral("decodius_model.txt")));
     if (mf.open(QIODevice::ReadOnly | QIODevice::Text)) {
         const QString m = QString::fromUtf8(mf.readAll()).trimmed();
         if (!m.isEmpty()) m_model = m;
         mf.close();
+    }
+    QFile userMf(modelConfigPath());
+    if (userMf.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        const QString m = QString::fromUtf8(userMf.readAll()).trimmed();
+        if (!m.isEmpty()) m_model = m;
+        userMf.close();
     }
 
     warmUp();   // precarica il modello in VRAM all'avvio (prima risposta veloce)
@@ -719,6 +739,29 @@ OllamaClient::OllamaClient(QObject* parent) : QObject(parent) {
         }}
     };
     m_tools.append(decCmd);
+}
+
+QString OllamaClient::modelConfigPath() const {
+    QString dir = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
+    if (dir.isEmpty()) dir = QCoreApplication::applicationDirPath();
+    QDir().mkpath(dir);
+    return dir + QStringLiteral("/model.txt");
+}
+
+void OllamaClient::setModel(const QString& m) {
+    const QString next = m.trimmed();
+    if (next.isEmpty() || next == m_model) return;
+
+    m_model = next;
+    QFile f(modelConfigPath());
+    if (f.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        f.write(m_model.toUtf8());
+        f.close();
+    }
+
+    warmUp();
+    if (!m_history.isEmpty())
+        warmChat();
 }
 
 void OllamaClient::setSystemPrompt(const QString& s) {
@@ -1206,8 +1249,7 @@ void OllamaClient::runCallsign(const QJsonObject& args, std::function<void(QStri
         ? QStringLiteral("Nominativo %1: prefisso non riconosciuto nella tabella locale.").arg(call)
         : QStringLiteral("Nominativo %1: paese probabile %2 (dal prefisso).").arg(call, country);
 
-    const QString credPath = QCoreApplication::applicationDirPath()
-                           + QStringLiteral("/decodius_hamqth.txt");
+    const QString credPath = decodiusResourcePath(QStringLiteral("decodius_hamqth.txt"));
     if (QFileInfo::exists(credPath)) { hamqthLookup(call, prefixInfo, done); return; }
     if (isUsCall(call)) { callookLookup(call, prefixInfo, done); return; }
     done(prefixInfo + QStringLiteral(" Per nome/QTH serve configurare HamQTH (mondiale); "
@@ -1252,7 +1294,7 @@ void OllamaClient::hamqthLookup(const QString& call, const QString& prefixInfo,
         hamqthQuery(call, prefixInfo, done); return;
     }
     // Login: leggo credenziali (riga1 user, riga2 password).
-    QFile cf(QCoreApplication::applicationDirPath() + QStringLiteral("/decodius_hamqth.txt"));
+    QFile cf(decodiusResourcePath(QStringLiteral("decodius_hamqth.txt")));
     QString user, pass;
     if (cf.open(QIODevice::ReadOnly | QIODevice::Text)) {
         const QStringList lines = QString::fromUtf8(cf.readAll()).split('\n');

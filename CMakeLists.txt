@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(Decodius VERSION 1.0 LANGUAGES CXX)
+project(Decodius VERSION 1.5 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -54,4 +54,66 @@ if (WIN32)
     set_target_properties(decodius PROPERTIES WIN32_EXECUTABLE TRUE)
     enable_language(RC)
     target_sources(decodius PRIVATE decodius.rc)
+endif()
+
+# Su macOS l'eseguibile "decodius" collide con la directory QML "Decodius"
+# su filesystem case-insensitive. Genera quindi il bundle GUI nativo.
+if (APPLE)
+    set_target_properties(decodius PROPERTIES
+        MACOSX_BUNDLE TRUE
+        OUTPUT_NAME Decodius
+        MACOSX_BUNDLE_BUNDLE_NAME Decodius
+        MACOSX_BUNDLE_GUI_IDENTIFIER it.iu8lmc.Decodius
+        MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION}
+        MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
+    )
+
+endif()
+
+set(DECODIUS_RUNTIME_FILES
+    decodius.ico
+    decodius_model.txt
+    decodius_system.txt
+    decodius_ham_kb.md
+    LEGGIMI.txt
+    LEGGIMI-Decodium.txt
+    setup_cervello.ps1
+)
+
+if (APPLE)
+    set(DECODIUS_RUNTIME_OUTPUT_DIR "$<TARGET_BUNDLE_DIR:decodius>/Contents/Resources")
+else()
+    set(DECODIUS_RUNTIME_OUTPUT_DIR "$<TARGET_FILE_DIR:decodius>")
+endif()
+
+foreach(runtime_file IN LISTS DECODIUS_RUNTIME_FILES)
+    add_custom_command(TARGET decodius POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/${runtime_file}"
+            "${DECODIUS_RUNTIME_OUTPUT_DIR}/${runtime_file}"
+        VERBATIM
+    )
+endforeach()
+
+add_custom_command(TARGET decodius POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_CURRENT_SOURCE_DIR}/edge"
+        "${DECODIUS_RUNTIME_OUTPUT_DIR}/edge"
+    VERBATIM
+)
+
+if (APPLE)
+    add_custom_command(TARGET decodius POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E rm -rf
+            "$<TARGET_FILE_DIR:decodius>/edge"
+            "$<TARGET_FILE_DIR:decodius>/decodius_model.txt"
+            "$<TARGET_FILE_DIR:decodius>/decodius_system.txt"
+            "$<TARGET_FILE_DIR:decodius>/decodius_ham_kb.md"
+            "$<TARGET_FILE_DIR:decodius>/setup_cervello.ps1"
+        COMMAND Qt6::macdeployqt
+            "$<TARGET_BUNDLE_DIR:decodius>"
+            "-qmldir=${CMAKE_CURRENT_SOURCE_DIR}"
+        COMMENT "Deploying Decodius macOS bundle with macdeployqt"
+        VERBATIM
+    )
 endif()

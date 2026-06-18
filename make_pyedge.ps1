@@ -1,5 +1,8 @@
 $ErrorActionPreference="Stop"
-$base="C:\Users\IU8LMC\decodius\build\pyedge"
+$base=$env:PYEDGE_DIR
+if ([string]::IsNullOrWhiteSpace($base)) {
+    $base="C:\Users\IU8LMC\decodius\build\pyedge"
+}
 if (Test-Path $base) { Remove-Item $base -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $base | Out-Null
 $zip="$env:TEMP\pyembed.zip"
