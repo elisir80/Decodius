@@ -20,7 +20,7 @@ env:
 jobs:
   windows-x64:
     name: Windows x64 installer
-    runs-on: windows-latest
+    runs-on: windows-2022
 
     steps:
       - name: Checkout
