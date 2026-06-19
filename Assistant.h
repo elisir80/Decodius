@@ -173,6 +173,7 @@ private:
     bool    m_alwaysListen = false;  // uso a TASTIERA di default: niente ascolto auto
                                      // (il WO Mic non è affidabile per lo STT). Il
                                      // pulsante Mic può comunque attivarlo a richiesta.
+    bool    m_streaming = false;     // true mentre arrivano token da Ollama
 
 #ifdef HAVE_TTS
     // Segmentazione per-frase: estrae le frasi complete dal testo in streaming
@@ -196,6 +197,5 @@ private:
     QStringList m_ttsQueue;          // blocchi in attesa di essere pronunciati
     QString     m_ttsPending;        // testo non ancora segmentato in frasi
     QString     m_ttsChunk;          // frasi corte in accumulo (< soglia minima)
-    bool        m_streaming = false; // true mentre arrivano token da Ollama
 #endif
 };
