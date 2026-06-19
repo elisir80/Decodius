@@ -32,15 +32,20 @@ WhisperStt::~WhisperStt() {
 
 void WhisperStt::start() {
     if (!m_available || m_server || m_pollTimer) return;
-    // Riusa un server già attivo, altrimenti lo lancio.
-    QNetworkReply* hr = m_net->get(QNetworkRequest(QUrl(m_host + QStringLiteral("/health"))));
-    QTimer::singleShot(2500, hr, [hr]() { if (hr->isRunning()) hr->abort(); });
-    connect(hr, &QNetworkReply::finished, this, [this, hr]() {
-        hr->deleteLater();
-        const bool alive = hr->error() == QNetworkReply::NoError &&
-            hr->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt() == 200;
-        if (!alive) launchServer();
-        beginReadyPolling();
+    // Niente riuso di server "fantasma": un whisper_server lasciato su :5068 da una
+    // sessione/exe precedente (codice vecchio, mic sbagliato o bloccato) verrebbe
+    // riusato ciecamente e l'ascolto non funzionerebbe. Chiedo a un eventuale server di
+    // spegnersi (/shutdown è innocuo se non c'è nessuno), poi lancio SEMPRE il mio, fresco.
+    QNetworkReply* sr = m_net->get(QNetworkRequest(QUrl(m_host + QStringLiteral("/shutdown"))));
+    QTimer::singleShot(1500, sr, [sr]() { if (sr->isRunning()) sr->abort(); });
+    connect(sr, &QNetworkReply::finished, this, [this, sr]() {
+        sr->deleteLater();
+        // Lascio al vecchio processo il tempo di liberare la porta, poi avvio il mio.
+        QTimer::singleShot(700, this, [this]() {
+            if (m_server || m_pollTimer) return;
+            launchServer();
+            beginReadyPolling();
+        });
     });
 }
 
