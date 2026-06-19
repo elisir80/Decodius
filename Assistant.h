@@ -38,6 +38,7 @@ class Assistant : public QObject {
     Q_PROPERTY(QString voiceEngine READ voiceEngine NOTIFY voiceEngineChanged)
     // HUD stazione live (stato di Decodium 4, aggiornato in tempo reale).
     Q_PROPERTY(bool stationOnline READ stationOnline NOTIFY stationChanged)
+    Q_PROPERTY(QString stationStatus READ stationStatus NOTIFY stationChanged)
     Q_PROPERTY(QString stationLine1 READ stationLine1 NOTIFY stationChanged)  // modo · banda · freq
     Q_PROPERTY(QString stationLine2 READ stationLine2 NOTIFY stationChanged)  // attività · TX/decodifiche
     // Call Roster dinamico: stazioni decodificate ora in banda (da Decodium).
@@ -73,8 +74,11 @@ public:
     Q_INVOKABLE void setVoiceEngine(const QString& e);  // edge | piper | clone
     Q_INVOKABLE void cycleVoiceEngine();                // cicla i motori disponibili
     bool stationOnline() const { return m_stationOnline; }
+    QString stationStatus() const { return m_stationStatus; }
     QString stationLine1() const { return m_stationLine1; }
     QString stationLine2() const { return m_stationLine2; }
+    Q_INVOKABLE void saveDecodiumWebToken(const QString& token);
+    Q_INVOKABLE void saveDecodiumCommandToken(const QString& user, const QString& token);
     QVariantList callRoster() const { return m_callRoster; }
     bool needsBrainSetup() const { return m_needsBrainSetup; }
     QString brainStatus() const { return m_brainStatus; }
@@ -109,6 +113,8 @@ signals:
     void rosterChanged();
     void brainChanged();
     void cardChanged();
+    void decodiumConfigResult(bool ok, const QString& message);
+    void decodiumCommandAuthRequired(const QString& message);
     // Inoltrato a QML: uno strumento chiede conferma prima di scrivere.
     void confirmationRequested(const QString& title, const QString& detail);
 
@@ -143,6 +149,7 @@ private:
     QTimer  m_hudTimer;
     QNetworkAccessManager* m_hudNet = nullptr;
     bool    m_stationOnline = false;
+    QString m_stationStatus = QStringLiteral("offline");
     QString m_stationLine1, m_stationLine2;
     QVariantList m_callRoster;
 

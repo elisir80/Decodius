@@ -1,6 +1,7 @@
 // OllamaClient.cpp
 #include "OllamaClient.h"
 #include "DecodiumConfig.h"
+#include "ConfigPaths.h"
 #include <QNetworkRequest>
 #include <QNetworkReply>
 #include <QJsonDocument>
@@ -21,6 +22,53 @@
 
 // Limite massimo di round di tool calling per una singola domanda (anti-loop).
 static constexpr int kMaxToolRounds = 5;
+
+static QString replyErrorMessage(QNetworkReply* reply, const QByteArray& bufferedBody = QByteArray())
+{
+    if (reply->error() == QNetworkReply::OperationCanceledError)
+        return QStringLiteral("tempo scaduto in attesa della risposta");
+
+    const QString base = reply->errorString();
+    QByteArray body = bufferedBody;
+    body += reply->readAll();
+    body = body.trimmed();
+
+    QString detail;
+    if (!body.isEmpty()) {
+        QJsonParseError parseError;
+        const QJsonDocument doc = QJsonDocument::fromJson(body, &parseError);
+        if (parseError.error == QJsonParseError::NoError && doc.isObject()) {
+            const QJsonObject obj = doc.object();
+            const QJsonValue err = obj.value(QStringLiteral("error"));
+            if (err.isObject())
+                detail = err.toObject().value(QStringLiteral("message")).toString();
+            else
+                detail = err.toString();
+            if (detail.isEmpty())
+                detail = obj.value(QStringLiteral("message")).toString();
+        }
+        if (detail.isEmpty())
+            detail = QString::fromUtf8(body).simplified();
+    }
+
+    if (detail.size() > 500)
+        detail = detail.left(500) + QStringLiteral("...");
+    if (detail.isEmpty() || base.contains(detail, Qt::CaseInsensitive))
+        return base;
+    return base + QStringLiteral(": ") + detail;
+}
+
+static QString toolResultFallbackText(QString result)
+{
+    result = result.trimmed();
+    if (result.startsWith(QStringLiteral("ESEGUITO:"), Qt::CaseInsensitive)) {
+        result = result.mid(QStringLiteral("ESEGUITO:").size()).trimmed();
+        result.remove(QStringLiteral("Conferma all'utente che è fatto."));
+        result = result.trimmed();
+        return result.isEmpty() ? QStringLiteral("Fatto.") : QStringLiteral("Fatto: %1").arg(result);
+    }
+    return result;
+}
 
 // ───────────────────────── Strumenti locali ─────────────────────────
 
@@ -99,7 +147,7 @@ static QString runReadFile(const QJsonObject& args) {
 // restituendo i paragrafi pertinenti all'argomento richiesto.
 static QString runHamKb(const QJsonObject& args) {
     const QString topic = args.value("topic").toString().trimmed();
-    QFile f(QCoreApplication::applicationDirPath() + QStringLiteral("/decodius_ham_kb.md"));
+    QFile f(decodiusConfigFilePath(QStringLiteral("decodius_ham_kb.md")));
     if (!f.open(QIODevice::ReadOnly | QIODevice::Text))
         return QStringLiteral("Knowledge base radioamatori non disponibile.");
     const QString kb = QString::fromUtf8(f.readAll());
@@ -138,11 +186,26 @@ static double argNum(const QJsonObject& a, const QString& k, double def = 0.0) {
     if (v.isDouble()) return v.toDouble();
     if (v.isString()) {
         bool ok = false;
-        double d = v.toString().trimmed().replace(',', '.').toDouble(&ok);
+        QString s = v.toString().trimmed().replace(',', '.');
+        double d = s.toDouble(&ok);
+        if (!ok) {
+            const auto m = QRegularExpression(QStringLiteral("[-+]?\\d+(?:\\.\\d+)?")).match(s);
+            if (m.hasMatch())
+                d = m.captured(0).toDouble(&ok);
+        }
         return ok ? d : def;
     }
     return def;
 }
+
+static qint64 fullFrequencyHz(double value)
+{
+    if (value <= 0) return 0;
+    if (value < 1000.0) return qint64(value * 1000000.0 + 0.5);   // MHz, es. 14.042
+    if (value < 1000000.0) return qint64(value * 1000.0 + 0.5);   // kHz, es. 14042
+    return qint64(value + 0.5);                                   // Hz
+}
+
 static bool hasArg(const QJsonObject& a, const QString& k) {
     const QJsonValue v = a.value(k);
     return !(v.isUndefined() || v.isNull() || (v.isString() && v.toString().trimmed().isEmpty()));
@@ -461,7 +524,7 @@ OllamaClient::OllamaClient(QObject* parent) : QObject(parent) {
 
     // Modello configurabile da file (decodius_model.txt) senza ricompilare: utile
     // per cambiare cervello (es. qwen3-coder:30b, qwen3:30b, gemma4 per la vision).
-    QFile mf(QCoreApplication::applicationDirPath() + QStringLiteral("/decodius_model.txt"));
+    QFile mf(decodiusConfigFilePath(QStringLiteral("decodius_model.txt")));
     if (mf.open(QIODevice::ReadOnly | QIODevice::Text)) {
         const QString m = QString::fromUtf8(mf.readAll()).trimmed();
         if (!m.isEmpty()) m_model = m;
@@ -474,7 +537,7 @@ OllamaClient::OllamaClient(QObject* parent) : QObject(parent) {
     //   api_key=nvapi-...
     //   model=nvidia/llama-3.3-nemotron-super-49b-v1
     // Se base_url e api_key sono presenti, Decodius usa quel provider invece di Ollama.
-    QFile pf(QCoreApplication::applicationDirPath() + QStringLiteral("/decodius_provider.txt"));
+    QFile pf(decodiusConfigFilePath(QStringLiteral("decodius_provider.txt")));
     if (pf.open(QIODevice::ReadOnly | QIODevice::Text)) {
         QString base, key, mdl;
         const QStringList lines = QString::fromUtf8(pf.readAll()).split('\n');
@@ -893,6 +956,7 @@ void OllamaClient::cancel() {
 void OllamaClient::ask(const QString& userText) {
     abortCurrent();         // una sola richiesta alla volta
     m_toolRounds = 0;
+    m_lastToolResult.clear();
     QJsonObject userMsg{{"role", "user"}, {"content", userText}};
     if (!m_pendingImage.isEmpty()) {        // allega l'immagine (vision) una sola volta
         userMsg["images"] = QJsonArray{ m_pendingImage };
@@ -1055,6 +1119,8 @@ void OllamaClient::onFinished() {
     reply->deleteLater();
 
     if (reply->error() != QNetworkReply::NoError) {
+        const QByteArray errorBody = m_lineBuf;
+        m_lineBuf.clear();
         // Niente risposta valida: tolgo dalla history il messaggio utente
         // rimasto in sospeso, così un nuovo tentativo non lo duplica.
         if (!m_history.isEmpty() &&
@@ -1065,10 +1131,7 @@ void OllamaClient::onFinished() {
         // Errore già segnalato da onReadyRead (caso "error" nel body): l'abort
         // conseguente non deve produrre un secondo messaggio.
         if (m_errored) return;
-        const QString msg = reply->error() == QNetworkReply::OperationCanceledError
-            ? QStringLiteral("tempo scaduto in attesa della risposta")
-            : reply->errorString();
-        emit errorOccurred(msg);
+        emit errorOccurred(replyErrorMessage(reply, errorBody));
         return;
     }
 
@@ -1078,7 +1141,9 @@ void OllamaClient::onFinished() {
         return;
     }
 
-    const QString content = m_acc.trimmed();
+    QString content = m_acc.trimmed();
+    if (content.isEmpty() && m_toolRounds > 0 && !m_lastToolResult.isEmpty())
+        content = toolResultFallbackText(m_lastToolResult);
     m_history.append(QJsonObject{{"role", "assistant"}, {"content", content}});
     emit responseReady(content);
 }
@@ -1130,6 +1195,7 @@ void OllamaClient::processNextToolCall() {
     // Continuazione comune: accoda il risultato e passa al tool successivo. Il messaggio
     // tool usa tool_call_id (OpenAI) oppure tool_name (Ollama) a seconda del backend.
     auto done = [this, name, callId](const QString& result) {
+        m_lastToolResult = result;
         QJsonObject toolMsg{{"role", "tool"}, {"content", result}};
         if (m_openai) toolMsg["tool_call_id"] = callId;
         else          toolMsg["tool_name"] = name;
@@ -1377,21 +1443,25 @@ void OllamaClient::runDxCluster(const QJsonObject& args, std::function<void(QStr
 }
 
 // Stato in tempo reale del decoder Decodium 4 via la sua API locale (porta 8080,
-// token da QSettings Decodium/Decodium3). Legge /api/state poi /api/decodes.
+// token da file o QSettings Decodium4/Decodium3). Legge /api/state poi /api/decodes.
 void OllamaClient::runDecodium(std::function<void(QString)> done) {
     const DecodiumConfig cfg = loadDecodiumConfig();
     const QString tok = cfg.webToken;
-    if (tok.isEmpty()) {
-        done(QStringLiteral("Decodium non risulta configurato: apri Decodium e attiva il web server (porta 8080)."));
-        return;
-    }
     const QString base = cfg.webBase() + QStringLiteral("/api/");
-    QNetworkReply* sr = m_net.get(QNetworkRequest(QUrl(base + QStringLiteral("state?token=") + tok)));
+    QUrl stateUrl(base + QStringLiteral("state"));
+    QUrlQuery stateQuery;
+    if (!tok.isEmpty()) stateQuery.addQueryItem(QStringLiteral("token"), tok);
+    stateUrl.setQuery(stateQuery);
+    QNetworkReply* sr = m_net.get(QNetworkRequest(stateUrl));
     QTimer::singleShot(6000, sr, [sr]() { if (sr->isRunning()) sr->abort(); });
     connect(sr, &QNetworkReply::finished, this, [this, sr, base, tok, done]() {
         sr->deleteLater();
         if (sr->error() != QNetworkReply::NoError) {
-            done(QStringLiteral("Decodium non raggiungibile: è in esecuzione con il web server attivo?"));
+            const int code = sr->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+            if (code == 401 || code == 403)
+                done(QStringLiteral("Decodium è raggiungibile ma richiede autenticazione: configura web_token in decodius_decodium.txt."));
+            else
+                done(QStringLiteral("Decodium non raggiungibile: è in esecuzione con il web server attivo sulla porta 8080?"));
             return;
         }
         const QJsonObject st = QJsonDocument::fromJson(sr->readAll()).object();
@@ -1409,7 +1479,11 @@ void OllamaClient::runDecodium(std::function<void(QString)> done) {
             .arg(dxCall.isEmpty() ? QString() : QStringLiteral(", in QSO con %1").arg(dxCall))
             .arg(nd);
 
-        QNetworkReply* dr = m_net.get(QNetworkRequest(QUrl(base + QStringLiteral("decodes?token=") + tok)));
+        QUrl decodesUrl(base + QStringLiteral("decodes"));
+        QUrlQuery decodesQuery;
+        if (!tok.isEmpty()) decodesQuery.addQueryItem(QStringLiteral("token"), tok);
+        decodesUrl.setQuery(decodesQuery);
+        QNetworkReply* dr = m_net.get(QNetworkRequest(decodesUrl));
         QTimer::singleShot(6000, dr, [dr]() { if (dr->isRunning()) dr->abort(); });
         connect(dr, &QNetworkReply::finished, this, [dr, head, done]() {
             dr->deleteLater();
@@ -1461,7 +1535,7 @@ void OllamaClient::runDecodiumCommand(const QJsonObject& args, std::function<voi
     QJsonObject body;
     if (cmd == "modo")          body = {{"type","set_mode"},{"mode", argStr("valore").toUpper()}};
     else if (cmd == "banda")    body = {{"type","set_band"},{"band", argStr("valore")}};
-    else if (cmd == "dial")     body = {{"type","set_dial_frequency"},{"dial_frequency_hz", (qint64)argNum(args,"hz")}};
+    else if (cmd == "dial")     body = {{"type","set_dial_frequency"},{"dial_frequency_hz", fullFrequencyHz(argNum(args,"hz"))}};
     else if (cmd == "rx")       body = {{"type","set_rx_frequency"},{"rx_frequency_hz", (int)argNum(args,"hz")}};
     else if (cmd == "tx")       body = {{"type","set_tx_frequency"},{"tx_frequency_hz", (int)argNum(args,"hz")}};
     else if (cmd == "monitoraggio") body = {{"type","set_monitoring"},{"enabled", attivo}};
@@ -1474,9 +1548,9 @@ void OllamaClient::runDecodiumCommand(const QJsonObject& args, std::function<voi
     else if (cmd == "cw") {     // trasmissione CW via keyer della radio (Hamlib)
         const QString testo = argStr("valore");
         if (testo.isEmpty()) { done(QStringLiteral("Per il CW serve il testo da trasmettere (valore).")); return; }
-        body = {{"type","send_cw"}, {"text", testo}};
-        const double hz = argNum(args, "hz");
-        if (hz > 0) body["dial_frequency_hz"] = (qint64)hz;
+        body = {{"type","send_cw"}, {"text", testo}, {"mode", "CW"}};
+        const qint64 hz = fullFrequencyHz(argNum(args, "hz"));
+        if (hz > 0) body["dial_frequency_hz"] = hz;
         const double wpm = argNum(args, "wpm");
         if (wpm > 0) body["wpm"] = (int)wpm;
     }
@@ -1484,45 +1558,101 @@ void OllamaClient::runDecodiumCommand(const QJsonObject& args, std::function<voi
     else if (cmd == "tx_off")   body = {{"type","set_tx_enabled"},{"enabled", false}};
     else { done(QStringLiteral("Comando Decodium sconosciuto: %1").arg(cmd)); return; }
 
-    const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
-    body["command_id"] = QStringLiteral("decodius-%1").arg(nowMs);
-    body["client_sent_ms"] = (double)nowMs;
+    auto stampBody = [](QJsonObject b, const QString& suffix) {
+        const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+        b["command_id"] = QStringLiteral("decodius-%1-%2").arg(suffix, QString::number(nowMs));
+        b["client_sent_ms"] = (double)nowMs;
+        return b;
+    };
+    body = stampBody(body, cmd);
 
-    QNetworkRequest req{ QUrl(cfg.cmdBase() + QStringLiteral("/api/v1/commands")) };
-    req.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
-    req.setRawHeader("X-Auth-User", user.toUtf8());
-    if (!token.isEmpty()) req.setRawHeader("Authorization", ("Bearer " + token).toUtf8());
+    auto postCommand = [this, cfg, user, token](const QJsonObject& postBody,
+                                                std::function<void(bool, int, QString, QString)> callback) {
+        QNetworkRequest req{ QUrl(cfg.cmdBase() + QStringLiteral("/api/v1/commands")) };
+        req.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+        req.setRawHeader("X-Auth-User", user.toUtf8());
+        if (!token.isEmpty()) req.setRawHeader("Authorization", ("Bearer " + token).toUtf8());
 
-    QNetworkReply* r = m_net.post(req, QJsonDocument(body).toJson(QJsonDocument::Compact));
-    QTimer::singleShot(8000, r, [r]() { if (r->isRunning()) r->abort(); });
-    connect(r, &QNetworkReply::finished, this, [r, cmd, done]() {
-        r->deleteLater();
-        if (r->error() != QNetworkReply::NoError) {
-            const int code = r->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-            if (code == 401 || code == 403)
+        QNetworkReply* r = m_net.post(req, QJsonDocument(postBody).toJson(QJsonDocument::Compact));
+        QTimer::singleShot(8000, r, [r]() { if (r->isRunning()) r->abort(); });
+        connect(r, &QNetworkReply::finished, this, [r, callback]() {
+            r->deleteLater();
+            if (r->error() != QNetworkReply::NoError) {
+                callback(false, r->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt(),
+                         QString(), QString());
+                return;
+            }
+            const QJsonObject o = QJsonDocument::fromJson(r->readAll()).object();
+            callback(true, 0,
+                     o.value("status").toString().toLower(),
+                     o.value("reason").toString(o.value("error").toString()));
+        });
+    };
+
+    auto commandFinished = [this, cmd, done](bool transportOk, int code,
+                                             const QString& status, const QString& reason) {
+        if (!transportOk) {
+            if (code == 401 || code == 403) {
+                emit decodiumCommandAuthRequired(QStringLiteral("Serve il token del Remote Command Server di Decodium."));
                 done(QStringLiteral("Decodium ha rifiutato il comando (autenticazione): serve il token del Remote Command Server."));
-            else
+            } else {
                 done(QStringLiteral("Decodium non raggiungibile per i comandi: abilita il Remote Command Server (porta 19091, bind 127.0.0.1) e riavvia Decodium."));
+            }
             return;
         }
-        const QJsonObject o = QJsonDocument::fromJson(r->readAll()).object();
-        const QString status = o.value("status").toString().toLower();
-        const QString reason = o.value("reason").toString(o.value("error").toString());
         // Interpreta l'esito e restituisci un messaggio CHIARO in italiano: l'LLM deve
         // capire subito se il comando è RIUSCITO (e confermarlo, non dire "non posso").
         const bool ok = status.startsWith("accepted") || status.startsWith("deferred")
                      || status.startsWith("queued") || status.contains("immediate")
                      || status == QStringLiteral("ok") || status.isEmpty();
         const bool rejected = status.contains("rejected") || status.contains("error");
-        if (ok)
-            done(QStringLiteral("ESEGUITO: il comando '%1' è stato accettato da Decodium. "
-                                "Conferma all'utente che è fatto.").arg(cmd));
-        else if (rejected)
+        if (ok) {
+            if (cmd == QLatin1String("cw"))
+                done(QStringLiteral("ESEGUITO: il comando CW è stato inviato e accettato da Decodium. "
+                                    "Non dire che la trasmissione RF è sicuramente avvenuta: se l'utente non sente nulla, "
+                                    "deve verificare che Decodium/radio siano in modo CW e che Hamlib/keyer/PTT siano configurati."));
+            else
+                done(QStringLiteral("ESEGUITO: il comando '%1' è stato accettato da Decodium. "
+                                    "Conferma all'utente che è fatto.").arg(cmd));
+        }
+        else if (rejected) {
+            if (reason.contains(QStringLiteral("token"), Qt::CaseInsensitive)
+                || reason.contains(QStringLiteral("auth"), Qt::CaseInsensitive))
+                emit decodiumCommandAuthRequired(QStringLiteral("Token comandi Decodium non valido o non allineato."));
             done(QStringLiteral("Decodium ha RIFIUTATO il comando '%1'%2.").arg(cmd,
                  reason.isEmpty() ? QString() : QStringLiteral(" (%1)").arg(reason)));
-        else
+        } else {
             done(QStringLiteral("Comando '%1' inviato a Decodium (stato: %2).").arg(cmd, status));
-    });
+        }
+    };
+
+    if (cmd == QLatin1String("cw")) {
+        QJsonObject modeBody = stampBody(QJsonObject{{"type", "set_mode"}, {"mode", "CW"}}, QStringLiteral("mode-cw"));
+        postCommand(modeBody, [this, body, commandFinished, done, postCommand](bool transportOk, int code,
+                                                                               const QString& status, const QString& reason) {
+            if (!transportOk) {
+                if (code == 401 || code == 403) {
+                    emit decodiumCommandAuthRequired(QStringLiteral("Serve il token del Remote Command Server di Decodium."));
+                    done(QStringLiteral("Decodium ha rifiutato il cambio modo CW (autenticazione)."));
+                } else {
+                    done(QStringLiteral("Non riesco a mettere Decodium in CW: Remote Command Server non raggiungibile."));
+                }
+                return;
+            }
+            const bool modeOk = status.startsWith("accepted") || status.startsWith("deferred")
+                             || status.startsWith("queued") || status.contains("immediate")
+                             || status == QStringLiteral("ok") || status.isEmpty();
+            if (!modeOk) {
+                done(QStringLiteral("Decodium ha rifiutato il cambio modo CW%1.")
+                     .arg(reason.isEmpty() ? QString() : QStringLiteral(" (%1)").arg(reason)));
+                return;
+            }
+            postCommand(body, commandFinished);
+        });
+        return;
+    }
+
+    postCommand(body, commandFinished);
 }
 
 // Lookup nominativo: paese da prefisso (sempre) + dettagli da HamQTH (se
@@ -1536,8 +1666,7 @@ void OllamaClient::runCallsign(const QJsonObject& args, std::function<void(QStri
         ? QStringLiteral("Nominativo %1: prefisso non riconosciuto nella tabella locale.").arg(call)
         : QStringLiteral("Nominativo %1: paese probabile %2 (dal prefisso).").arg(call, country);
 
-    const QString credPath = QCoreApplication::applicationDirPath()
-                           + QStringLiteral("/decodius_hamqth.txt");
+    const QString credPath = decodiusConfigFilePath(QStringLiteral("decodius_hamqth.txt"));
     if (QFileInfo::exists(credPath)) { hamqthLookup(call, prefixInfo, done); return; }
     if (isUsCall(call)) { callookLookup(call, prefixInfo, done); return; }
     done(prefixInfo + QStringLiteral(" Per nome/QTH serve configurare HamQTH (mondiale); "
@@ -1582,7 +1711,7 @@ void OllamaClient::hamqthLookup(const QString& call, const QString& prefixInfo,
         hamqthQuery(call, prefixInfo, done); return;
     }
     // Login: leggo credenziali (riga1 user, riga2 password).
-    QFile cf(QCoreApplication::applicationDirPath() + QStringLiteral("/decodius_hamqth.txt"));
+    QFile cf(decodiusConfigFilePath(QStringLiteral("decodius_hamqth.txt")));
     QString user, pass;
     if (cf.open(QIODevice::ReadOnly | QIODevice::Text)) {
         const QStringList lines = QString::fromUtf8(cf.readAll()).split('\n');

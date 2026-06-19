@@ -32,6 +32,7 @@ signals:
     void tokenReceived(const QString& chunk);   // pezzo di testo appena generato
     void responseReady(const QString& text);    // risposta completa (a fine stream)
     void errorOccurred(const QString& message);
+    void decodiumCommandAuthRequired(const QString& message);
     // Uno strumento "in scrittura" chiede conferma prima di agire.
     void confirmationRequested(const QString& title, const QString& detail);
 
@@ -65,6 +66,7 @@ private:
     QString    m_acc;                   // testo accumulato finora
     QJsonArray m_toolCalls;             // tool_calls raccolti nello stream corrente
     QJsonArray m_pendingCalls;          // tool_calls in esecuzione nel round corrente
+    QString    m_lastToolResult;        // fallback se il modello tace dopo un tool
     int        m_callIndex = 0;         // indice del tool in esecuzione
     bool       m_errored = false;       // errore già segnalato per questa richiesta
     bool       m_userCancelled = false; // interruzione utente: niente messaggio d'errore

@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls.Basic
+import QtQuick.Dialogs
 import QtQuick.Layouts
 import QtQuick.Effects
 import Decodius
@@ -88,6 +89,16 @@ Window {
         function onConfirmationRequested(title, detail) {
             confirmDialog.title = title; confirmDetail.text = detail; confirmDialog.open()
         }
+        function onDecodiumConfigResult(ok, message) {
+            decodiumTokenDialog.busy = false
+            decodiumTokenDialog.ok = ok
+            decodiumTokenDialog.statusText = message
+            if (ok) decodiumTokenInput.text = ""
+        }
+        function onDecodiumCommandAuthRequired(message) {
+            decodiumTokenDialog.openFresh("command")
+            decodiumTokenDialog.statusText = message
+        }
     }
 
     // ───────────────── SFONDO: aurora animata (blob sfocati) ─────────────────
@@ -154,11 +165,14 @@ Window {
 
             // HUD stazione live (stato di Decodium 4) — in alto a destra
             Rectangle {
+                id: hudPanel
                 anchors.right: parent.right; anchors.top: parent.top
+                property bool stationAttention: !assistant.stationOnline && assistant.stationStatus !== "offline"
                 width: Math.max(hudCol.implicitWidth + 28, 200); height: hudCol.implicitHeight + 18
                 radius: 10
                 color: Qt.rgba(0.04, 0.10, 0.14, 0.55)
-                border.color: assistant.stationOnline ? Qt.rgba(0.3,0.95,0.6,0.5) : Qt.rgba(0.5,0.5,0.5,0.3)
+                border.color: assistant.stationOnline ? Qt.rgba(0.3,0.95,0.6,0.5)
+                              : (hudPanel.stationAttention ? Qt.rgba(1.0,0.68,0.18,0.55) : Qt.rgba(0.5,0.5,0.5,0.3))
                 border.width: 1
                 Column {
                     id: hudCol
@@ -166,15 +180,26 @@ Window {
                     Row {
                         spacing: 6
                         Rectangle { width: 8; height: 8; radius: 4; anchors.verticalCenter: parent.verticalCenter
-                                    color: assistant.stationOnline ? "#3df58a" : "#ff5d72" }
-                        Text { text: "DECODIUM " + (assistant.stationOnline ? "ONLINE" : "offline")
-                               color: assistant.stationOnline ? "#9fe7c0" : "#8aa0ab"
+                                    color: assistant.stationOnline ? "#3df58a"
+                                          : (hudPanel.stationAttention ? "#ffb02e" : "#ff5d72") }
+                        Text { text: "DECODIUM " + assistant.stationStatus
+                               color: assistant.stationOnline ? "#9fe7c0"
+                                     : (hudPanel.stationAttention ? "#ffd28a" : "#8aa0ab")
                                font.pixelSize: 10; font.bold: true; font.letterSpacing: 1 }
                     }
-                    Text { visible: assistant.stationOnline; text: assistant.stationLine1
+                    Text { visible: assistant.stationOnline || hudPanel.stationAttention; text: assistant.stationLine1
                            color: "#eaf6fb"; font.pixelSize: 13; font.family: "Consolas"; font.bold: true }
-                    Text { visible: assistant.stationOnline; text: assistant.stationLine2
+                    Text { visible: assistant.stationOnline || hudPanel.stationAttention; text: assistant.stationLine2
                            color: "#7fb3c8"; font.pixelSize: 11; font.family: "Consolas" }
+                    Button {
+                        visible: assistant.stationStatus === "token richiesto"
+                        width: 148; height: 26
+                        text: "Configura token"
+                        onClicked: decodiumTokenDialog.openFresh("web")
+                        background: Rectangle { radius: 8; color: "#1b2730"; border.color: "#ffb02e"; border.width: 1 }
+                        contentItem: Text { text: parent.text; color: "#ffd28a"; font.bold: true; font.pixelSize: 11
+                            horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                    }
                 }
             }
 
@@ -584,7 +609,10 @@ Window {
                     text: assistant.hasImage ? "📷✓" : "📷"
                     fg: assistant.hasImage ? "#04121a" : root.accent
                     baseColor: assistant.hasImage ? root.accent : "#10202b"
-                    onClicked: if (assistant.hasImage) assistant.clearImage()
+                    onClicked: {
+                        if (assistant.hasImage) assistant.clearImage()
+                        else imageDialog.open()
+                    }
                 }
                 PillButton {
                     text: assistant.alwaysListening ? "🎤" : "🎤"
@@ -727,7 +755,8 @@ Window {
                        text: "🟢 CQ  🟡 attive"; color: "#9fc0cf"; font.pixelSize: 9 }
             }
             Text { visible: assistant.callRoster.length === 0
-                   text: assistant.stationOnline ? "Nessuna stazione in banda." : "Decodium offline."
+                   text: assistant.stationOnline ? "Nessuna stazione in banda."
+                         : (assistant.stationStatus === "offline" ? "Decodium offline." : "Decodium: " + assistant.stationStatus + ".")
                    color: "#6f93a4"; font.pixelSize: 12; width: parent.width; wrapMode: Text.WordWrap }
             ListView {
                 visible: !rosterPanel.mapView
@@ -783,6 +812,13 @@ Window {
         border.color: root.accent; border.width: 2; radius: 16
         Text { anchors.centerIn: parent; text: "Rilascia l'immagine per allegarla a Decodius"
                color: root.accent; font.bold: true; font.pixelSize: 20 }
+    }
+
+    FileDialog {
+        id: imageDialog
+        title: "Scegli immagine"
+        nameFilters: ["Immagini (*.png *.jpg *.jpeg *.webp *.bmp)", "Tutti i file (*)"]
+        onAccepted: assistant.attachImage(selectedFile)
     }
 
     // ───────── Dialog conferma strumenti in scrittura ─────────
@@ -852,6 +888,96 @@ Window {
             assistant.setCallSign(c)
             callDialog.close()
             showWelcome()
+        }
+    }
+
+    Dialog {
+        id: decodiumTokenDialog; modal: true; anchors.centerIn: parent
+        width: Math.min(root.width - 80, 480); padding: 22
+        closePolicy: decodiumTokenDialog.busy ? Popup.NoAutoClose : Popup.CloseOnEscape
+        property string mode: "web"
+        property bool busy: false
+        property bool ok: false
+        property string statusText: ""
+        property bool commandMode: mode === "command"
+        background: Rectangle { radius: 16; color: "#0c141d"; border.color: decodiumTokenDialog.ok ? "#3df58a" : "#ffb02e"; border.width: 1 }
+        contentItem: ColumnLayout {
+            spacing: 12
+            Text { text: decodiumTokenDialog.commandMode ? "Token comandi Decodium" : "Token web Decodium"
+                   color: "#eaf6fb"; font.bold: true; font.pixelSize: 18 }
+            Text { text: decodiumTokenDialog.commandMode
+                        ? "Per i comandi serve il Remote Command Server. Su 127.0.0.1 il token puo' essere vuoto se Decodium e' configurato cosi'."
+                        : "Incolla il token web di Decodium. Decodius lo prova prima di salvarlo."
+                   color: "#9fc0cf"; font.pixelSize: 12; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+            TextField {
+                id: decodiumUserInput
+                visible: decodiumTokenDialog.commandMode
+                Layout.fillWidth: true
+                color: "#eaf6fb"; font.pixelSize: 13
+                text: "admin"
+                placeholderText: "utente comandi"
+                enabled: !decodiumTokenDialog.busy
+                background: Rectangle { radius: 8; color: "#0a131c"; border.color: Qt.rgba(1,1,1,0.15); border.width: 1 }
+            }
+            TextField {
+                id: decodiumTokenInput
+                Layout.fillWidth: true
+                color: "#eaf6fb"; font.pixelSize: 13
+                echoMode: TextInput.PasswordEchoOnEdit
+                placeholderText: decodiumTokenDialog.commandMode ? "cmd_token (vuoto se Decodium lo permette)" : "web_token"
+                enabled: !decodiumTokenDialog.busy
+                onAccepted: decodiumTokenDialog.submit()
+                background: Rectangle { radius: 8; color: "#0a131c"; border.color: Qt.rgba(1,1,1,0.15); border.width: 1 }
+            }
+            Text {
+                visible: decodiumTokenDialog.statusText.length > 0
+                text: decodiumTokenDialog.statusText
+                color: decodiumTokenDialog.ok ? "#9fe7c0" : "#ffb6b6"
+                font.pixelSize: 12; wrapMode: Text.WordWrap; Layout.fillWidth: true
+            }
+            RowLayout {
+                Layout.fillWidth: true; spacing: 10
+                Button {
+                    text: decodiumTokenDialog.busy ? "Verifico..." : "Salva e verifica"
+                    enabled: !decodiumTokenDialog.busy
+                             && (decodiumTokenDialog.commandMode || decodiumTokenInput.text.trim().length > 0)
+                             && (!decodiumTokenDialog.commandMode || decodiumUserInput.text.trim().length > 0)
+                    onClicked: decodiumTokenDialog.submit()
+                    background: Rectangle { radius: 9; opacity: parent.enabled ? 1 : 0.45; color: "#ffb02e" }
+                    contentItem: Text { text: parent.text; color: "#04121a"; font.bold: true; font.pixelSize: 12; padding: 6
+                        horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                }
+                Item { Layout.fillWidth: true }
+                Button {
+                    text: decodiumTokenDialog.ok ? "OK" : "Annulla"
+                    enabled: !decodiumTokenDialog.busy
+                    onClicked: decodiumTokenDialog.close()
+                    background: Rectangle { radius: 9; color: "#1a2a36" }
+                    contentItem: Text { text: parent.text; color: "#9fc0cf"; font.pixelSize: 12; padding: 6
+                        horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                }
+            }
+        }
+        function openFresh(modeName) {
+            mode = modeName || "web"
+            busy = false
+            ok = false
+            statusText = ""
+            decodiumTokenInput.text = ""
+            decodiumUserInput.text = "admin"
+            open()
+            if (commandMode) decodiumUserInput.forceActiveFocus()
+            else decodiumTokenInput.forceActiveFocus()
+        }
+        function submit() {
+            var token = decodiumTokenInput.text.trim()
+            if (busy) return
+            if (!commandMode && token.length === 0) return
+            busy = true
+            ok = false
+            statusText = "Verifica in corso..."
+            if (commandMode) assistant.saveDecodiumCommandToken(decodiumUserInput.text, token)
+            else assistant.saveDecodiumWebToken(token)
         }
     }
 

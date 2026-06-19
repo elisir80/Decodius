@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(Decodius VERSION 1.0 LANGUAGES CXX)
+project(Decodius VERSION 1.12 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -22,6 +22,7 @@ qt_add_executable(decodius
     XttsTts.cpp
     WhisperStt.cpp
     DecodiumConfig.cpp
+    ConfigPaths.cpp
 )
 
 qt_add_qml_module(decodius
@@ -34,6 +35,7 @@ qt_add_qml_module(decodius
     SOURCES
         AudioAnalyzer.h
         Assistant.h
+        ConfigPaths.h
 )
 
 target_link_libraries(decodius PRIVATE
@@ -65,7 +67,7 @@ if (APPLE)
         MACOSX_BUNDLE TRUE
         MACOSX_BUNDLE_BUNDLE_NAME "Decodius"
         MACOSX_BUNDLE_GUI_IDENTIFIER "com.iu8lmc.decodius"
-        MACOSX_BUNDLE_BUNDLE_VERSION "1.11"
-        MACOSX_BUNDLE_SHORT_VERSION_STRING "1.11"
+        MACOSX_BUNDLE_BUNDLE_VERSION "1.12"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "1.12"
     )
 endif()

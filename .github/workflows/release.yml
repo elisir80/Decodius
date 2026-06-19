@@ -3,16 +3,16 @@ name: Build release assets
 on:
   push:
     tags:
-      - v1.11
+      - v1.12
   workflow_dispatch:
 
 permissions:
   contents: write
 
 env:
-  VERSION: "1.11"
-  RELEASE_TAG: "v1.11"
-  RELEASE_TITLE: "Decodius 1.11 Alpha"
+  VERSION: "1.12"
+  RELEASE_TAG: "v1.12"
+  RELEASE_TITLE: "Decodius 1.12 Alpha"
   QT_VERSION: "6.8.3"
 
 jobs:
@@ -23,7 +23,14 @@ jobs:
       - name: Create release notes
         run: |
           cat > release-notes.md <<'NOTES'
-          Decodius 1.11 Alpha.
+          Decodius 1.12 Alpha.
+
+          Include i fix locali per:
+          - rilevamento Decodium e configurazione token da GUI;
+          - selettore immagini;
+          - gestione Ollama e modello;
+          - comandi CW/Remote Command Server;
+          - STT aggiornato da upstream.
 
           Asset inclusi dalla pipeline:
           - Windows x64
@@ -152,10 +159,10 @@ jobs:
       matrix:
         include:
           - name: Linux x64
-            runner: ubuntu-26.04
+            runner: ubuntu-24.04
             asset: linux-x64
           - name: Linux arm64
-            runner: ubuntu-26.04-arm
+            runner: ubuntu-24.04-arm
             asset: linux-arm64
     steps:
       - uses: actions/checkout@v4
@@ -179,6 +186,7 @@ jobs:
           for package in \
             qml6-module-qtquick \
             qml6-module-qtquick-controls \
+            qml6-module-qtquick-dialogs \
             qml6-module-qtquick-layouts \
             qml6-module-qtquick-effects
           do

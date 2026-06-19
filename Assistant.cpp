@@ -24,6 +24,7 @@
 #include <QProcess>
 #include <QUrlQuery>
 #include "DecodiumConfig.h"
+#include "ConfigPaths.h"
 
 static const char* kSystemPrompt =
     "Ti chiami Decodius. Sei l'assistente personale di Martino, radioamatore (IU8LMC) "
@@ -36,7 +37,7 @@ Assistant::Assistant(QObject* parent) : QObject(parent) {
     // Persona/competenza caricata da file (decodius_system.txt, esperto radioamatori),
     // così è aggiornabile senza ricompilare; fallback al prompt minimo integrato.
     m_sysPromptRaw = QString::fromUtf8(kSystemPrompt);
-    QFile pf(QCoreApplication::applicationDirPath() + QStringLiteral("/decodius_system.txt"));
+    QFile pf(decodiusConfigFilePath(QStringLiteral("decodius_system.txt")));
     if (pf.open(QIODevice::ReadOnly | QIODevice::Text)) {
         const QString loaded = QString::fromUtf8(pf.readAll()).trimmed();
         if (!loaded.isEmpty()) m_sysPromptRaw = loaded;
@@ -102,6 +103,7 @@ Assistant::Assistant(QObject* parent) : QObject(parent) {
     });
 
     connect(&m_ollama, &OllamaClient::responseReady, this, [this](const QString& text) {
+        const bool hadStreamedText = !m_lastResponse.trimmed().isEmpty();
         // Tick del pilota automatico: l'LLM ha già agito via tool. Ora il commento:
         // se è "SILENZIO" non c'è nulla di rilevante -> non parlo e non sporco la chat.
         if (m_inAutoTick) {
@@ -113,8 +115,13 @@ Assistant::Assistant(QObject* parent) : QObject(parent) {
                 m_lastResponse = t;
                 emit lastResponseChanged();
 #ifdef HAVE_TTS
+                if (!hadStreamedText)
+                    m_ttsPending += t;
                 enqueueSentences(true);
+                const bool hasSpeech = !m_ttsQueue.isEmpty();
+                if (hasSpeech && m_state != Speaking) setState(Speaking);
                 speakNext();
+                if (!hasSpeech && !ttsBusy() && m_state != Idle) endTurn();
 #else
                 endTurn();
 #endif
@@ -127,8 +134,13 @@ Assistant::Assistant(QObject* parent) : QObject(parent) {
         emit lastResponseChanged();
 #ifdef HAVE_TTS
         m_streaming = false;
+        if (!text.trimmed().isEmpty() && !hadStreamedText)
+            m_ttsPending += text;
         enqueueSentences(true);    // svuota l'ultima coda di testo
+        const bool hasSpeech = !m_ttsQueue.isEmpty();
+        if (hasSpeech && m_state != Speaking) setState(Speaking);
         speakNext();               // se non c'è nulla da dire, porta a Idle
+        if (!hasSpeech && !ttsBusy() && m_state != Idle) endTurn();
         if (m_xttsPausedForImage) { // riaccendo XTTS dopo la query vision
             m_xttsPausedForImage = false;
             if (m_xtts) m_xtts->start();
@@ -142,6 +154,11 @@ Assistant::Assistant(QObject* parent) : QObject(parent) {
     connect(&m_ollama, &OllamaClient::confirmationRequested, this,
             [this](const QString& title, const QString& detail) {
         emit confirmationRequested(title, detail);
+    });
+
+    connect(&m_ollama, &OllamaClient::decodiumCommandAuthRequired, this,
+            [this](const QString& message) {
+        emit decodiumCommandAuthRequired(message);
     });
 
     connect(&m_ollama, &OllamaClient::errorOccurred, this, [this](const QString& msg) {
@@ -427,19 +444,53 @@ static QString bandFromHz(double hz) {
     return QStringLiteral("—");
 }
 
+static bool decodiumCommandAcceptedStatus(const QString& status)
+{
+    const QString s = status.toLower();
+    return s.startsWith(QStringLiteral("accepted")) || s.startsWith(QStringLiteral("deferred"))
+        || s.startsWith(QStringLiteral("queued")) || s.contains(QStringLiteral("immediate"))
+        || s == QStringLiteral("ok") || s.isEmpty();
+}
+
+static bool writeDecodiumConfigFile(const DecodiumConfig& cfg)
+{
+    const QString path = decodiusWritableConfigFilePath(QStringLiteral("decodius_decodium.txt"));
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate))
+        return false;
+
+    QString out;
+    out += QStringLiteral("host=%1\n").arg(cfg.host);
+    out += QStringLiteral("web_port=%1\n").arg(cfg.webPort);
+    out += QStringLiteral("web_token=%1\n").arg(cfg.webToken);
+    out += QStringLiteral("cmd_port=%1\n").arg(cfg.cmdPort);
+    out += QStringLiteral("cmd_user=%1\n").arg(cfg.cmdUser);
+    out += QStringLiteral("cmd_token=%1\n").arg(cfg.cmdToken);
+    f.write(out.toUtf8());
+    f.close();
+    return true;
+}
+
 // Un ciclo dell'HUD: legge /api/state di Decodium 4 e aggiorna le righe di stato.
 void Assistant::onHudTick() {
     const DecodiumConfig cfg = loadDecodiumConfig();
-    QUrl url(cfg.webBase() + QStringLiteral("/api/state?token=") + cfg.webToken);
+    QUrl url(cfg.webBase() + QStringLiteral("/api/state"));
+    QUrlQuery query;
+    if (!cfg.webToken.isEmpty())
+        query.addQueryItem(QStringLiteral("token"), cfg.webToken);
+    url.setQuery(query);
     QNetworkReply* r = m_hudNet->get(QNetworkRequest(url));
     QTimer::singleShot(2500, r, [r]() { if (r->isRunning()) r->abort(); });
     connect(r, &QNetworkReply::finished, this, [this, r]() {
         r->deleteLater();
-        bool online = false; QString l1, l2;
+        bool online = false;
+        QString status = QStringLiteral("offline");
+        QString l1, l2;
         if (r->error() == QNetworkReply::NoError) {
             const QJsonObject o = QJsonDocument::fromJson(r->readAll()).object();
             if (!o.isEmpty()) {
                 online = true;
+                status = QStringLiteral("ONLINE");
                 const QString mode = o.value(QStringLiteral("mode")).toString();
                 const double dial = o.value(QStringLiteral("dialFrequency")).toDouble();
                 l1 = QStringLiteral("%1 · %2 · %3 MHz").arg(
@@ -452,9 +503,36 @@ void Assistant::onHudTick() {
                 else l2 = QStringLiteral("%1 decodifiche%2").arg(dc).arg(
                         dx.isEmpty() ? QString() : QStringLiteral(" · DX %1").arg(dx));
             }
+            if (!online) {
+                status = QStringLiteral("errore dati");
+                l1 = QStringLiteral("Decodium raggiunto");
+                l2 = QStringLiteral("Risposta /api/state non valida.");
+            }
+        } else {
+            const int httpStatus = r->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+            if (httpStatus == 401 || httpStatus == 403) {
+                status = QStringLiteral("token richiesto");
+                l1 = QStringLiteral("Decodium raggiunto");
+                l2 = QStringLiteral("Configura web_token in decodius_decodium.txt.");
+            } else if (httpStatus > 0) {
+                status = QStringLiteral("errore %1").arg(httpStatus);
+                l1 = QStringLiteral("Decodium raggiunto");
+                l2 = QStringLiteral("Risposta HTTP %1 da /api/state.").arg(httpStatus);
+            } else if (r->error() == QNetworkReply::OperationCanceledError) {
+                status = QStringLiteral("timeout");
+                l1 = QStringLiteral("Nessuna risposta da Decodium");
+                l2 = QStringLiteral("Controlla web server, porta 8080 e firewall.");
+            } else {
+                l1 = QStringLiteral("Nessuna connessione a Decodium");
+                l2 = QStringLiteral("Controlla web server, porta 8080 e firewall.");
+            }
         }
-        if (online != m_stationOnline || l1 != m_stationLine1 || l2 != m_stationLine2) {
-            m_stationOnline = online; m_stationLine1 = l1; m_stationLine2 = l2;
+        if (online != m_stationOnline || status != m_stationStatus
+            || l1 != m_stationLine1 || l2 != m_stationLine2) {
+            m_stationOnline = online;
+            m_stationStatus = status;
+            m_stationLine1 = l1;
+            m_stationLine2 = l2;
             emit stationChanged();
         }
     });
@@ -475,12 +553,22 @@ static bool gridToLatLon(const QString& g, double& lat, double& lon) {
 // Legge /api/decodes di Decodium e costruisce il call roster (stazioni in banda ora).
 void Assistant::fetchRoster() {
     const DecodiumConfig cfg = loadDecodiumConfig();
-    QUrl url(cfg.webBase() + QStringLiteral("/api/decodes?token=") + cfg.webToken);
+    QUrl url(cfg.webBase() + QStringLiteral("/api/decodes"));
+    QUrlQuery query;
+    if (!cfg.webToken.isEmpty())
+        query.addQueryItem(QStringLiteral("token"), cfg.webToken);
+    url.setQuery(query);
     QNetworkReply* r = m_hudNet->get(QNetworkRequest(url));
     QTimer::singleShot(2500, r, [r]() { if (r->isRunning()) r->abort(); });
     connect(r, &QNetworkReply::finished, this, [this, r]() {
         r->deleteLater();
-        if (r->error() != QNetworkReply::NoError) return;
+        if (r->error() != QNetworkReply::NoError) {
+            if (!m_callRoster.isEmpty()) {
+                m_callRoster.clear();
+                emit rosterChanged();
+            }
+            return;
+        }
         const QJsonArray decs = QJsonDocument::fromJson(r->readAll()).object()
                                     .value(QStringLiteral("decodes")).toArray();
         QVariantList roster;
@@ -515,10 +603,145 @@ void Assistant::fetchRoster() {
     });
 }
 
+void Assistant::saveDecodiumWebToken(const QString& token) {
+    const QString cleanToken = token.trimmed();
+    if (cleanToken.isEmpty()) {
+        emit decodiumConfigResult(false, QStringLiteral("Inserisci il token web di Decodium."));
+        return;
+    }
+
+    DecodiumConfig cfg = loadDecodiumConfig();
+    QUrl url(cfg.webBase() + QStringLiteral("/api/state"));
+    QUrlQuery query;
+    query.addQueryItem(QStringLiteral("token"), cleanToken);
+    url.setQuery(query);
+
+    m_stationOnline = false;
+    m_stationStatus = QStringLiteral("verifica token");
+    m_stationLine1 = QStringLiteral("Controllo Decodium");
+    m_stationLine2 = QStringLiteral("Validazione del token web in corso.");
+    emit stationChanged();
+
+    QNetworkReply* r = m_hudNet->get(QNetworkRequest(url));
+    QTimer::singleShot(5000, r, [r]() { if (r->isRunning()) r->abort(); });
+    connect(r, &QNetworkReply::finished, this, [this, r, cfg, cleanToken]() mutable {
+        r->deleteLater();
+
+        if (r->error() != QNetworkReply::NoError) {
+            const int httpStatus = r->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+            QString msg;
+            if (httpStatus == 401 || httpStatus == 403)
+                msg = QStringLiteral("Token non accettato da Decodium.");
+            else if (httpStatus > 0)
+                msg = QStringLiteral("Decodium ha risposto HTTP %1.").arg(httpStatus);
+            else if (r->error() == QNetworkReply::OperationCanceledError)
+                msg = QStringLiteral("Timeout: Decodium non ha risposto al test del token.");
+            else
+                msg = QStringLiteral("Decodium non raggiungibile sulla porta web configurata.");
+            emit decodiumConfigResult(false, msg);
+            onHudTick();
+            return;
+        }
+
+        const QJsonObject state = QJsonDocument::fromJson(r->readAll()).object();
+        if (state.isEmpty()) {
+            emit decodiumConfigResult(false, QStringLiteral("Token accettato ma risposta Decodium non valida."));
+            onHudTick();
+            return;
+        }
+
+        cfg.webToken = cleanToken;
+        if (!writeDecodiumConfigFile(cfg)) {
+            emit decodiumConfigResult(false, QStringLiteral("Token valido, ma non riesco a salvare la configurazione."));
+            onHudTick();
+            return;
+        }
+
+        emit decodiumConfigResult(true, QStringLiteral("Token Decodium salvato e verificato."));
+        onHudTick();
+    });
+}
+
+void Assistant::saveDecodiumCommandToken(const QString& user, const QString& token) {
+    const QString cleanUser = user.trimmed().isEmpty() ? QStringLiteral("admin") : user.trimmed();
+    const QString cleanToken = token.trimmed();
+
+    DecodiumConfig cfg = loadDecodiumConfig();
+    QUrl stateUrl(cfg.webBase() + QStringLiteral("/api/state"));
+    QUrlQuery stateQuery;
+    if (!cfg.webToken.isEmpty())
+        stateQuery.addQueryItem(QStringLiteral("token"), cfg.webToken);
+    stateUrl.setQuery(stateQuery);
+
+    QNetworkReply* sr = m_hudNet->get(QNetworkRequest(stateUrl));
+    QTimer::singleShot(5000, sr, [sr]() { if (sr->isRunning()) sr->abort(); });
+    connect(sr, &QNetworkReply::finished, this, [this, sr, cfg, cleanUser, cleanToken]() mutable {
+        sr->deleteLater();
+        if (sr->error() != QNetworkReply::NoError) {
+            emit decodiumConfigResult(false, QStringLiteral("Non riesco a leggere lo stato Decodium per validare il token comandi."));
+            return;
+        }
+
+        const QJsonObject state = QJsonDocument::fromJson(sr->readAll()).object();
+        if (state.isEmpty()) {
+            emit decodiumConfigResult(false, QStringLiteral("Risposta Decodium non valida durante il test del token comandi."));
+            return;
+        }
+
+        QJsonObject body{
+            {QStringLiteral("type"), QStringLiteral("set_monitoring")},
+            {QStringLiteral("enabled"), state.value(QStringLiteral("monitoring")).toBool()}
+        };
+        const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+        body[QStringLiteral("command_id")] = QStringLiteral("decodius-auth-test-%1").arg(nowMs);
+        body[QStringLiteral("client_sent_ms")] = double(nowMs);
+
+        QNetworkRequest req{ QUrl(cfg.cmdBase() + QStringLiteral("/api/v1/commands")) };
+        req.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+        req.setRawHeader("X-Auth-User", cleanUser.toUtf8());
+        if (!cleanToken.isEmpty())
+            req.setRawHeader("Authorization", ("Bearer " + cleanToken).toUtf8());
+
+        QNetworkReply* cr = m_hudNet->post(req, QJsonDocument(body).toJson(QJsonDocument::Compact));
+        QTimer::singleShot(8000, cr, [cr]() { if (cr->isRunning()) cr->abort(); });
+        connect(cr, &QNetworkReply::finished, this, [this, cr, cfg, cleanUser, cleanToken]() mutable {
+            cr->deleteLater();
+            if (cr->error() != QNetworkReply::NoError) {
+                const int code = cr->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+                if (code == 401 || code == 403)
+                    emit decodiumConfigResult(false, QStringLiteral("Token comandi non accettato da Decodium."));
+                else
+                    emit decodiumConfigResult(false, QStringLiteral("Remote Command Server non raggiungibile sulla porta 19091."));
+                return;
+            }
+
+            const QJsonObject o = QJsonDocument::fromJson(cr->readAll()).object();
+            const QString status = o.value(QStringLiteral("status")).toString();
+            const QString reason = o.value(QStringLiteral("reason")).toString(o.value(QStringLiteral("error")).toString());
+            if (!decodiumCommandAcceptedStatus(status)) {
+                emit decodiumConfigResult(false, reason.isEmpty()
+                    ? QStringLiteral("Token comandi non accettato da Decodium.")
+                    : QStringLiteral("Token comandi non accettato: %1").arg(reason));
+                return;
+            }
+
+            cfg.cmdUser = cleanUser;
+            cfg.cmdToken = cleanToken;
+            if (!writeDecodiumConfigFile(cfg)) {
+                emit decodiumConfigResult(false, QStringLiteral("Token valido, ma non riesco a salvare la configurazione comandi."));
+                return;
+            }
+
+            emit decodiumConfigResult(true, cleanToken.isEmpty()
+                ? QStringLiteral("Comandi Decodium verificati e salvati senza token.")
+                : QStringLiteral("Token comandi Decodium salvato e verificato."));
+        });
+    });
+}
+
 // Verifica se un "cervello" è pronto: provider cloud configurato oppure Ollama attivo.
 void Assistant::checkBrain() {
-    const QString appDir = QCoreApplication::applicationDirPath();
-    if (QFileInfo::exists(appDir + QStringLiteral("/decodius_provider.txt"))) {
+    if (QFileInfo::exists(decodiusConfigFilePath(QStringLiteral("decodius_provider.txt")))) {
         m_needsBrainSetup = false;
         m_brainStatus = QStringLiteral("Provider cloud configurato.");
         emit brainChanged();
@@ -555,7 +778,7 @@ void Assistant::runBrainSetup() {
 // Salva un provider cloud OpenAI-compatibile (richiede riavvio per applicarlo).
 void Assistant::saveProvider(const QString& baseUrl, const QString& apiKey, const QString& model) {
     if (baseUrl.trimmed().isEmpty() || apiKey.trimmed().isEmpty()) return;
-    QFile f(QCoreApplication::applicationDirPath() + QStringLiteral("/decodius_provider.txt"));
+    QFile f(decodiusWritableConfigFilePath(QStringLiteral("decodius_provider.txt")));
     if (f.open(QIODevice::WriteOnly | QIODevice::Text)) {
         const QString m = model.trimmed().isEmpty() ? QStringLiteral("meta/llama-3.1-8b-instruct")
                                                      : model.trimmed();
@@ -584,7 +807,7 @@ void Assistant::showCard(const QString& call) {
 void Assistant::hamLookup(const QString& call) {
     // Credenziali da decodius_hamqth.txt (riga1 user, riga2 password).
     QString user, pass;
-    QFile f(QCoreApplication::applicationDirPath() + QStringLiteral("/decodius_hamqth.txt"));
+    QFile f(decodiusConfigFilePath(QStringLiteral("decodius_hamqth.txt")));
     if (f.open(QIODevice::ReadOnly | QIODevice::Text)) {
         const QStringList lines = QString::fromUtf8(f.readAll()).split('\n');
         if (lines.size() >= 1) user = lines.at(0).trimmed();
