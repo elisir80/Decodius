@@ -66,14 +66,17 @@ Source: "{#Build}\qml\*"; DestDir: "{app}\qml"; Flags: ignoreversion recursesubd
 ; --- Voce: server edge + Python PORTATILE con edge-tts ---
 Source: "{#Build}\edge\edge_server.py"; DestDir: "{app}\edge"; Flags: ignoreversion
 Source: "{#Build}\pyedge\*"; DestDir: "{app}\pyedge"; Flags: ignoreversion recursesubdirs createallsubdirs
-; --- STT PORTATILE: Python embeddable + faster-whisper + modello 'small' incluso ---
-; Così l'app installata ha i comandi vocali (voce->testo) ovunque, offline, senza
-; Python di sistema. Bundle creato da make_pywhisper.ps1 (cartella build\pywhisper).
-Source: "{#Build}\pywhisper\*"; DestDir: "{app}\pywhisper"; Flags: ignoreversion recursesubdirs createallsubdirs
+; --- STT (comandi vocali): OPZIONALE, scaricato a richiesta (installer leggero) ---
+; Lo STT non è impacchettato (sarebbero ~700 MB): setup_stt.ps1 scarica a richiesta
+; un Python portatile con faster-whisper + modello 'small' in {app}\pywhisper.
+; Attivabile dal task post-install opzionale o dall'icona "Attiva voce (STT)".
+Source: "{#Build}\setup_stt.ps1"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#Build}\whisper_server.py"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\Decodius"; Filename: "{app}\{#MyAppExe}"; IconFilename: "{app}\decodius.ico"; WorkingDir: "{app}"
 Name: "{group}\Configura cervello (Ollama)"; Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\setup_cervello.ps1"""; IconFilename: "{app}\decodius.ico"; WorkingDir: "{app}"
+Name: "{group}\Attiva voce (STT)"; Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\setup_stt.ps1"""; IconFilename: "{app}\decodius.ico"; WorkingDir: "{app}"
 Name: "{group}\Leggimi"; Filename: "{app}\LEGGIMI.txt"
 Name: "{group}\Collega Decodium"; Filename: "{app}\LEGGIMI-Decodium.txt"
 Name: "{group}\Disinstalla Decodius"; Filename: "{uninstallexe}"
@@ -81,6 +84,7 @@ Name: "{autodesktop}\Decodius"; Filename: "{app}\{#MyAppExe}"; IconFilename: "{a
 
 [Run]
 Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\setup_cervello.ps1"""; Description: "Configura ora il cervello (Ollama + gpt-oss:120b) — consigliato"; WorkingDir: "{app}"; Flags: postinstall skipifsilent runasoriginaluser
+Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\setup_stt.ps1"""; Description: "Attiva i comandi vocali (STT, ~700 MB, opzionale)"; WorkingDir: "{app}"; Flags: postinstall skipifsilent unchecked
 Filename: "{app}\{#MyAppExe}"; Description: "{cm:LaunchProgram,Decodius}"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent
 
 [UninstallDelete]
