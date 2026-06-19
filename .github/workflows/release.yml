@@ -1,0 +1,218 @@
+name: Build release assets
+
+on:
+  push:
+    tags:
+      - v1.11
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  VERSION: "1.11"
+  RELEASE_TAG: "v1.11"
+  RELEASE_TITLE: "Decodius 1.11 Alpha"
+  QT_VERSION: "6.8.3"
+
+jobs:
+  ensure-release:
+    name: Create GitHub release
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Create release notes
+        run: |
+          cat > release-notes.md <<'NOTES'
+          Decodius 1.11 Alpha.
+
+          Asset inclusi dalla pipeline:
+          - Windows x64
+          - macOS Intel
+          - macOS Apple Silicon
+          - Linux x64
+          - Linux arm64
+
+          Su macOS l'app non e' firmata: al primo avvio potrebbe servire Apri dal menu contestuale o la rimozione della quarantena.
+          NOTES
+
+      - name: Create or update prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "$RELEASE_TITLE" \
+              --notes-file release-notes.md \
+              --prerelease
+          else
+            gh release create "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "$RELEASE_TITLE" \
+              --notes-file release-notes.md \
+              --prerelease \
+              --target "$GITHUB_SHA"
+          fi
+
+  windows:
+    name: Windows x64
+    runs-on: windows-latest
+    needs: ensure-release
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install Qt
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install aqtinstall
+          python -m aqt install-qt windows desktop $env:QT_VERSION win64_msvc2022_64 `
+            -O C:\Qt `
+            -m qtdeclarative qtmultimedia qtshadertools qtspeech
+
+      - name: Configure
+        shell: pwsh
+        run: |
+          $qtPrefix = "C:\Qt\$env:QT_VERSION\msvc2022_64"
+          $env:PATH = "$qtPrefix\bin;$env:PATH"
+          cmake -B build -S . -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_PREFIX_PATH=$qtPrefix"
+
+      - name: Build
+        shell: pwsh
+        run: cmake --build build --parallel
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $qtPrefix = "C:\Qt\$env:QT_VERSION\msvc2022_64"
+          $env:PATH = "$qtPrefix\bin;$env:PATH"
+          New-Item -ItemType Directory -Force dist\Decodius | Out-Null
+          Copy-Item build\decodius.exe dist\Decodius\
+          windeployqt --release --compiler-runtime --qmldir "$pwd" dist\Decodius\decodius.exe
+
+          foreach ($file in @("README.md", "LEGGIMI.txt", "decodius_system.txt", "decodius_model.txt", "decodius_ham_kb.md", "whisper_server.py")) {
+            if (Test-Path $file) { Copy-Item $file dist\Decodius\ }
+          }
+          if (Test-Path edge) { Copy-Item edge dist\Decodius\edge -Recurse }
+
+          Compress-Archive -Path dist\Decodius -DestinationPath "Decodius-v$env:VERSION-alpha-windows-x64.zip" -Force
+
+      - name: Upload release asset
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$env:RELEASE_TAG" "Decodius-v$env:VERSION-alpha-windows-x64.zip" --repo "$env:GITHUB_REPOSITORY" --clobber
+
+  macos:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    needs: ensure-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS Intel
+            runner: macos-15-intel
+            asset: macos-intel
+          - name: macOS Apple Silicon
+            runner: macos-14
+            asset: macos-apple-silicon
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: brew install qt cmake ninja
+
+      - name: Configure
+        run: |
+          QT_PREFIX="$(brew --prefix qt)"
+          cmake -B build -S . -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$QT_PREFIX"
+
+      - name: Build
+        run: cmake --build build --parallel "$(sysctl -n hw.ncpu)"
+
+      - name: Package
+        run: |
+          QT_PREFIX="$(brew --prefix qt)"
+          "$QT_PREFIX/bin/macdeployqt" build/decodius.app -qmldir=.
+          ditto -c -k --sequesterRsrc --keepParent build/decodius.app "Decodius-v${VERSION}-alpha-${{ matrix.asset }}.zip"
+
+      - name: Upload release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$RELEASE_TAG" "Decodius-v${VERSION}-alpha-${{ matrix.asset }}.zip" --repo "$GITHUB_REPOSITORY" --clobber
+
+  linux:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    needs: ensure-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x64
+            runner: ubuntu-26.04
+            asset: linux-x64
+          - name: Linux arm64
+            runner: ubuntu-26.04-arm
+            asset: linux-arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            ninja-build \
+            libgl1-mesa-dev \
+            libpulse-dev \
+            libxkbcommon-dev \
+            qt6-base-dev \
+            qt6-declarative-dev \
+            qt6-declarative-dev-tools \
+            qt6-multimedia-dev \
+            qt6-tools-dev-tools
+          sudo apt-get install -y qt6-speech-dev || true
+          for package in \
+            qml6-module-qtquick \
+            qml6-module-qtquick-controls \
+            qml6-module-qtquick-layouts \
+            qml6-module-qtquick-effects
+          do
+            sudo apt-get install -y "$package" || true
+          done
+
+      - name: Configure
+        run: cmake -B build -S . -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --parallel "$(nproc)"
+
+      - name: Package
+        run: |
+          mkdir -p dist/Decodius
+          cp build/decodius dist/Decodius/
+          chmod +x dist/Decodius/decodius
+          for file in README.md LEGGIMI.txt decodius_system.txt decodius_model.txt decodius_ham_kb.md whisper_server.py; do
+            [ -f "$file" ] && cp "$file" dist/Decodius/
+          done
+          [ -d edge ] && cp -R edge dist/Decodius/edge
+          cat > dist/Decodius/RUN_LINUX.txt <<'EOF'
+          Avvio:
+            ./decodius
+
+          Questo archivio contiene il binario compilato per la piattaforma indicata.
+          Se Qt6 non e' gia' presente sul sistema, installare i pacchetti runtime Qt6
+          equivalenti a quelli usati dalla build.
+          EOF
+          tar -czf "Decodius-v${VERSION}-alpha-${{ matrix.asset }}.tar.gz" -C dist Decodius
+
+      - name: Upload release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$RELEASE_TAG" "Decodius-v${VERSION}-alpha-${{ matrix.asset }}.tar.gz" --repo "$GITHUB_REPOSITORY" --clobber
