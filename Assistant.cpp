@@ -62,6 +62,14 @@ Assistant::Assistant(QObject* parent) : QObject(parent) {
     m_hudTimer.start();
     QTimer::singleShot(800, this, [this]() { onHudTick(); });
 
+    // Watchdog dell'ascolto: in modalità always-on ri-arma listen() se il loop si è
+    // fermato (un turno non è arrivato a endTurn — es. una richiesta al cervello cloud
+    // appesa o una coda TTS bloccata). Senza questo, dopo uno stallo Decodius resta
+    // vivo ma "sordo" e i comandi vocali non vengono più recepiti finché non si riavvia.
+    m_listenWatchdog.setInterval(4000);
+    connect(&m_listenWatchdog, &QTimer::timeout, this, &Assistant::onListenWatchdog);
+    m_listenWatchdog.start();
+
     // Wizard cervello: verifica all'avvio se un LLM è pronto, altrimenti guida l'utente.
     QTimer::singleShot(1500, this, [this]() { checkBrain(); });
 
@@ -155,10 +163,18 @@ Assistant::Assistant(QObject* parent) : QObject(parent) {
     });
 
     // ── Voce-in: riconoscimento vocale locale (Whisper su CPU, niente VRAM) ──
-    const QString wbase = QCoreApplication::applicationDirPath() + QStringLiteral("/whisper");
-    m_whisper = new WhisperStt(wbase + QStringLiteral("/venv/Scripts/python.exe"),
-                               wbase + QStringLiteral("/whisper_server.py"),
-                               QStringLiteral("small"), 5068, this);
+    // Preferisci il bundle PORTATILE `pywhisper` (Python embeddable + faster-whisper +
+    // modello incluso) creato da make_pywhisper.ps1 e impacchettato nell'installer: così
+    // l'app INSTALLATA ha lo STT ovunque, offline. Fallback al venv di sviluppo
+    // `whisper/venv` (non portabile, legato al Python di sistema).
+    const QString sttAppDir = QCoreApplication::applicationDirPath();
+    QString sttPython = sttAppDir + QStringLiteral("/pywhisper/pythonw.exe");
+    QString sttScript = sttAppDir + QStringLiteral("/pywhisper/whisper_server.py");
+    if (!QFileInfo::exists(sttPython) || !QFileInfo::exists(sttScript)) {
+        sttPython = sttAppDir + QStringLiteral("/whisper/venv/Scripts/python.exe");
+        sttScript = sttAppDir + QStringLiteral("/whisper/whisper_server.py");
+    }
+    m_whisper = new WhisperStt(sttPython, sttScript, QStringLiteral("small"), 5068, this);
     if (m_whisper->isAvailable()) {
         connect(m_whisper, &WhisperStt::listeningChanged, this, [this]() {
             if (m_whisper->isListening()) setState(Listening);
@@ -918,6 +934,18 @@ void Assistant::endTurn() {
         });
     } else {
         setState(Idle);
+    }
+}
+
+// Auto-guarigione del loop di ascolto always-on: se siamo in ascolto continuo, lo STT
+// è pronto, lo stato è Idle e NON stiamo già ascoltando, allora un turno non ha
+// ri-armato listen() (stallo). Lo riavvio qui, così l'assistente torna a sentire la
+// voce senza dover riavviare l'app. È un no-op quando l'ascolto continuo è spento o
+// quando un'operazione è realmente in corso (Thinking/Speaking o listen già attivo).
+void Assistant::onListenWatchdog() {
+    if (m_alwaysListen && m_whisper && m_whisper->isReady()
+        && m_state == Idle && !m_whisper->isListening()) {
+        m_whisper->listen();
     }
 }
 

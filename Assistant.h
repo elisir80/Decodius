@@ -122,6 +122,10 @@ private:
     // Instradamento del riconoscimento vocale, con filtro anti-eco per il barge-in.
     void onSpeechRecognized(const QString& text);
     bool isLikelyEcho(const QString& text) const;   // distingue l'eco di Decodius dalla voce utente
+    // Watchdog di auto-guarigione: in ascolto continuo ri-arma listen() se il loop
+    // si è fermato (un turno non è arrivato a endTurn), così Decodius non resta "sordo".
+    void onListenWatchdog();
+    QTimer m_listenWatchdog;
     bool m_voiceBargeIn = true;   // ascolta mentre parla per interrompere a voce
     // Wake-word: in ascolto continuo processa una frase solo se contiene "Decodius"
     // (o se siamo ancora nella finestra di "veglia" dopo l'ultima interazione).

@@ -3,7 +3,7 @@
 ;  Compila con:  "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" decodius.iss
 ; ============================================================================
 #define MyAppName "Decodius"
-#define MyAppVersion "1.10"
+#define MyAppVersion "1.11"
 #define MyAppPublisher "IU8LMC"
 #define MyAppExe "decodius.exe"
 #define Build "C:\Users\IU8LMC\decodius\build"
@@ -66,6 +66,10 @@ Source: "{#Build}\qml\*"; DestDir: "{app}\qml"; Flags: ignoreversion recursesubd
 ; --- Voce: server edge + Python PORTATILE con edge-tts ---
 Source: "{#Build}\edge\edge_server.py"; DestDir: "{app}\edge"; Flags: ignoreversion
 Source: "{#Build}\pyedge\*"; DestDir: "{app}\pyedge"; Flags: ignoreversion recursesubdirs createallsubdirs
+; --- STT PORTATILE: Python embeddable + faster-whisper + modello 'small' incluso ---
+; Così l'app installata ha i comandi vocali (voce->testo) ovunque, offline, senza
+; Python di sistema. Bundle creato da make_pywhisper.ps1 (cartella build\pywhisper).
+Source: "{#Build}\pywhisper\*"; DestDir: "{app}\pywhisper"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\Decodius"; Filename: "{app}\{#MyAppExe}"; IconFilename: "{app}\decodius.ico"; WorkingDir: "{app}"
